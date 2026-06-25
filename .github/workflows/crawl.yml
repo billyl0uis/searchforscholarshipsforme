@@ -58,12 +58,10 @@ jobs:
             echo "SENDGRID_API_KEY: set (length=${#SENDGRID_API_KEY})"
           fi
 
-      - name: Download previous database (first run is OK if this fails)
-        id: download-db
+      - name: Download previous database
         uses: actions/download-artifact@v4
         with:
           name: scholarships-db
-          path: .
         continue-on-error: true
 
       - name: Report database status

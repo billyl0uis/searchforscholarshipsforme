@@ -59,8 +59,12 @@ def main():
     print(f"Max crawl depth: {max_depth}")
 
     # ── Init DB ───────────────────────────────────────────────────
-    init_db(DB_PATH)
-    print(f"Database initialized: {DB_PATH}")
+    if not os.path.exists(DB_PATH):
+        print(f"No existing database found — creating fresh DB at {DB_PATH}")
+    else:
+        print(f"Existing database found at {DB_PATH}")
+    init_db(DB_PATH)  # CREATE TABLE IF NOT EXISTS — safe on both new and existing DBs
+    print(f"Database ready: {DB_PATH}")
 
     # ── Crawl ─────────────────────────────────────────────────────
     print("\n── CRAWLING ──────────────────────────────────────────────")
