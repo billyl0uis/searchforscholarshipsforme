@@ -29,29 +29,60 @@ KEYWORD_FLAGS = [
     "emerging artist",
 ]
 
-# Pages likely to contain opportunities
-PRIORITY_PATH_PATTERNS = [
-    r"scholarship",
-    r"financial.?aid",
-    r"assistantship",
-    r"residenc",
-    r"fellowship",
-    r"news",
-    r"announc",
-    r"apply",
-    r"admission",
-    r"award",
-    r"grant",
-    r"stipend",
-    r"opport",
-    r"fund",
+# Paths to probe first on every domain before general crawling
+PRIORITY_PATHS = [
+    "/scholarships",
+    "/scholarship",
+    "/financial-aid",
+    "/financial_aid",
+    "/assistantships",
+    "/assistantship",
+    "/residencies",
+    "/residency",
+    "/fellowships",
+    "/fellowship",
+    "/apply",
+    "/awards",
+    "/award",
+    "/grants",
+    "/grant",
+    "/programs",
+    "/tuition",
+    "/support",
+    "/funding",
+    "/opportunities",
 ]
 
-# URL path segments and file extensions to skip entirely
+# URL path segments that signal high-value pages worth following
+RELEVANT_PATH_KEYWORDS = {
+    "scholarship", "financial", "aid", "assistantship", "residenc",
+    "fellowship", "award", "grant", "stipend", "fund", "opport",
+    "apply", "admission", "program", "tuition", "support", "emerging",
+    "artist", "craft", "glass", "metal", "jewelry", "studio", "news",
+    "announc",
+}
+
+# Anchor text words that signal a link is worth following
+RELEVANT_ANCHOR_KEYWORDS = {
+    "scholarship", "financial aid", "assistantship", "residency",
+    "fellowship", "award", "grant", "stipend", "funding", "apply",
+    "opportunity", "program", "tuition", "support",
+}
+
+# Subdomain prefixes that will never have scholarship content — skip entirely
+SKIP_SUBDOMAINS = {
+    "store", "shop", "tickets", "give", "donate", "cart", "checkout",
+    "mail", "email", "cdn", "static", "assets", "media", "images",
+    "api", "dev", "staging", "sandbox", "test",
+}
+
+# URL path segments to skip
 SKIP_PATH_SEGMENTS = {
     "/cdn-cgi/", "/wp-json/", "/feed/", "/tag/", "/page/",
     "/wp-content/uploads/", "/wp-includes/", "/xmlrpc",
-    "/trackback/", "/embed/", "/oembed/",
+    "/trackback/", "/embed/", "/oembed/", "/cart/", "/checkout/",
+    "/store/", "/shop/", "/product/", "/author/", "/staff/",
+    "/calendar/", "/event/", "/ticket/", "/donate/", "/give/",
 }
 
 SKIP_EXTENSIONS = {
@@ -62,8 +93,8 @@ SKIP_EXTENSIONS = {
     ".css", ".js", ".map",
 }
 
-PER_SITE_TIMEOUT = 3 * 60       # 3 minutes per domain
-PER_SITE_PAGE_CAP = 50          # max pages crawled per domain
+PER_SITE_TIMEOUT = 2 * 60       # 2 minutes per domain
+PER_SITE_PAGE_CAP = 30          # max pages per domain
 GLOBAL_TIMEOUT = 4 * 60 * 60   # 4 hours total
 
 
@@ -72,9 +103,44 @@ def _contains_keywords(text: str) -> bool:
     return any(kw in text_lower for kw in KEYWORD_FLAGS)
 
 
-def _is_priority_url(url: str) -> bool:
+def _is_relevant_link(url: str, anchor_text: str = "") -> bool:
+    """Return True if a link looks worth following based on URL path or anchor text."""
     path = urlparse(url).path.lower()
-    return any(re.search(p, path) for p in PRIORITY_PATH_PATTERNS)
+    anchor = anchor_text.lower()
+
+    # Always follow PDF links
+    if path.endswith(".pdf"):
+        return True
+
+    # Follow if the path contains any relevant keyword
+    for kw in RELEVANT_PATH_KEYWORDS:
+        if kw in path:
+            return True
+
+    # Follow if anchor text contains any relevant phrase
+    for kw in RELEVANT_ANCHOR_KEYWORDS:
+        if kw in anchor:
+            return True
+
+    # Skip likely junk: blog-style date paths (/2024/03/event-recap)
+    if re.search(r"/\d{4}/\d{2}/", path):
+        return False
+
+    return False
+
+
+def _should_skip_subdomain(base_url: str, link_url: str) -> bool:
+    """Skip subdomains like store.*, shop.*, tickets.*, give.* etc."""
+    base_netloc = urlparse(base_url).netloc.lower().lstrip("www.")
+    link_parsed = urlparse(link_url)
+    link_netloc = link_parsed.netloc.lower()
+
+    # Extract subdomain portion
+    if link_netloc.endswith(base_netloc):
+        subdomain = link_netloc[: -(len(base_netloc))].rstrip(".")
+        if subdomain and subdomain.split(".")[-1] in SKIP_SUBDOMAINS:
+            return True
+    return False
 
 
 def _should_skip_url(url: str) -> bool:
@@ -82,17 +148,14 @@ def _should_skip_url(url: str) -> bool:
     parsed = urlparse(url)
     path_lower = parsed.path.lower()
 
-    # Skip by extension
     for ext in SKIP_EXTENSIONS:
         if path_lower.endswith(ext):
             return True
 
-    # Skip by path segment
     for seg in SKIP_PATH_SEGMENTS:
         if seg in path_lower:
             return True
 
-    # Skip query-string-heavy WordPress pagination (?p=123, ?page_id=)
     qs = parsed.query.lower()
     if re.search(r"page_id=|p=\d+|replytocom=", qs):
         return True
@@ -115,11 +178,13 @@ def _normalize_url(url: str) -> str:
     return parsed._replace(fragment="").geturl()
 
 
-def _extract_links(base_url: str, html: str, internal_only: bool = True) -> list[str]:
+def _extract_links(base_url: str, html: str, internal_only: bool = True) -> list[tuple[str, str]]:
+    """Return list of (url, anchor_text) tuples."""
     soup = BeautifulSoup(html, "lxml")
     links = []
     for tag in soup.find_all("a", href=True):
         href = tag["href"].strip()
+        anchor = tag.get_text(strip=True)
         full = urljoin(base_url, href)
         full = _normalize_url(full)
         parsed = urlparse(full)
@@ -129,8 +194,17 @@ def _extract_links(base_url: str, html: str, internal_only: bool = True) -> list
             continue
         if _should_skip_url(full):
             continue
-        links.append(full)
-    return list(set(links))
+        if _should_skip_subdomain(base_url, full):
+            continue
+        links.append((full, anchor))
+    # Deduplicate by URL
+    seen = set()
+    result = []
+    for url, anchor in links:
+        if url not in seen:
+            seen.add(url)
+            result.append((url, anchor))
+    return result
 
 
 def _extract_pdf_links(base_url: str, html: str) -> list[str]:
@@ -183,7 +257,7 @@ async def _fetch_with_playwright(url: str) -> Optional[str]:
 
 async def _fetch_static(url: str, client: httpx.AsyncClient) -> Optional[str]:
     try:
-        resp = await client.get(url, timeout=20, follow_redirects=True)
+        resp = await client.get(url, timeout=15, follow_redirects=True)
         resp.raise_for_status()
         ct = resp.headers.get("content-type", "")
         if "html" in ct or ct == "":
@@ -192,6 +266,15 @@ async def _fetch_static(url: str, client: httpx.AsyncClient) -> Optional[str]:
     except Exception as e:
         print(f"    [httpx error] {url}: {e}")
         return None
+
+
+async def _head_exists(url: str, client: httpx.AsyncClient) -> bool:
+    """Quick HEAD check — returns False if 404 or error."""
+    try:
+        resp = await client.head(url, timeout=8, follow_redirects=True)
+        return resp.status_code < 400
+    except Exception:
+        return False
 
 
 def _fetch_pdf_text(url: str) -> Optional[str]:
@@ -220,33 +303,44 @@ async def crawl_site(
     page_cap: int = PER_SITE_PAGE_CAP,
 ) -> list[dict]:
     """
-    Crawl a site recursively up to max_depth, with per-site timeout and page cap.
+    Crawl a site with priority-path probing, per-site timeout, and page cap.
     Returns list of dicts: {url, html_text, page_type, school}
     """
     if keyword_flags:
         global KEYWORD_FLAGS
         KEYWORD_FLAGS = keyword_flags
 
-    school = urlparse(base_url).netloc.replace("www.", "")
+    parsed_base = urlparse(base_url)
+    base_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+    school = parsed_base.netloc.replace("www.", "")
     visited: set[str] = set()
     results: list[dict] = []
-    queue: list[tuple[str, int]] = [(base_url, 0)]
     site_start = time.monotonic()
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
         follow_redirects=True,
     ) as client:
+
+        # ── Phase 1: probe priority paths ──────────────────────────
+        priority_queue: list[tuple[str, int]] = []
+        print(f"  Probing {len(PRIORITY_PATHS)} priority paths...")
+        for path in PRIORITY_PATHS:
+            probe_url = _normalize_url(base_origin + path)
+            if await _head_exists(probe_url, client):
+                priority_queue.append((probe_url, 1))
+
+        # The homepage always goes first
+        queue: list[tuple[str, int]] = [(base_url, 0)] + priority_queue
+
+        # ── Phase 2: general crawl ──────────────────────────────────
         while queue:
-            # Per-site timeout check
             elapsed = time.monotonic() - site_start
             if elapsed >= site_timeout:
-                print(f"  [TIMEOUT] {school}: {site_timeout}s limit reached after {len(visited)} pages — moving on")
+                print(f"  [TIMEOUT] {school}: {site_timeout}s limit after {len(visited)} pages")
                 break
-
-            # Per-site page cap
             if len(visited) >= page_cap:
-                print(f"  [CAP] {school}: {page_cap}-page limit reached — moving on")
+                print(f"  [CAP] {school}: {page_cap}-page limit reached")
                 break
 
             url, depth = queue.pop(0)
@@ -255,6 +349,8 @@ async def crawl_site(
             if url in visited:
                 continue
             if _should_skip_url(url):
+                continue
+            if _should_skip_subdomain(base_url, url):
                 continue
 
             visited.add(url)
@@ -266,7 +362,6 @@ async def crawl_site(
             print(f"  [{page_num}/{page_cap}] depth={depth} {url}")
 
             is_pdf = url.lower().endswith(".pdf")
-
             if is_pdf:
                 pdf_text = _fetch_pdf_text(url)
                 if pdf_text and _contains_keywords(pdf_text):
@@ -279,10 +374,8 @@ async def crawl_site(
                 continue
 
             html = await _fetch_static(url, client)
-
             if html is None or len(html) < 500:
                 html = await _fetch_with_playwright(url)
-
             if not html:
                 continue
 
@@ -302,11 +395,14 @@ async def crawl_site(
                 print(f"    ✓ flagged ({page_type})")
 
             if depth < max_depth:
-                links = _extract_links(url, html, internal_links_only)
-                priority = [l for l in links if _is_priority_url(l) and l not in visited]
-                regular = [l for l in links if not _is_priority_url(l) and l not in visited]
-                for link in priority + regular:
-                    queue.append((link, depth + 1))
+                all_links = _extract_links(url, html, internal_links_only)
+                # Only enqueue links that look relevant (URL or anchor text)
+                relevant = [
+                    (lurl, anchor) for lurl, anchor in all_links
+                    if lurl not in visited and _is_relevant_link(lurl, anchor)
+                ]
+                for link_url, _ in relevant:
+                    queue.append((link_url, depth + 1))
 
                 for pdf_url in _extract_pdf_links(url, html):
                     if pdf_url not in visited:
@@ -333,20 +429,20 @@ async def crawl_all_sites(
     for i, url in enumerate(targets, 1):
         global_elapsed = time.monotonic() - global_start
         if global_elapsed >= global_timeout:
-            print(f"\n[GLOBAL TIMEOUT] {global_timeout/3600:.1f}h limit reached after {i-1}/{len(targets)} sites — stopping crawl")
+            print(f"\n[GLOBAL TIMEOUT] {global_timeout/3600:.1f}h limit after {i-1}/{len(targets)} sites")
             break
 
         remaining = global_timeout - global_elapsed
-        effective_site_timeout = min(site_timeout, remaining)
+        effective_timeout = min(site_timeout, int(remaining))
 
-        print(f"\n[{i}/{len(targets)}] Crawling: {url}  (global elapsed: {global_elapsed/60:.1f}m)")
+        print(f"\n[{i}/{len(targets)}] {url}  (global: {global_elapsed/60:.1f}m elapsed)")
         try:
             pages = await crawl_site(
                 url,
                 max_depth=max_depth,
                 internal_links_only=internal_links_only,
                 keyword_flags=keyword_flags,
-                site_timeout=int(effective_site_timeout),
+                site_timeout=effective_timeout,
                 page_cap=page_cap,
             )
             all_results[url] = pages
@@ -354,6 +450,6 @@ async def crawl_all_sites(
             print(f"  ERROR crawling {url}: {e}")
             all_results[url] = []
 
-    total_elapsed = time.monotonic() - global_start
-    print(f"\nCrawl complete: {len(all_results)}/{len(targets)} sites in {total_elapsed/60:.1f}m")
+    total = time.monotonic() - global_start
+    print(f"\nCrawl complete: {len(all_results)}/{len(targets)} sites in {total/60:.1f}m")
     return all_results

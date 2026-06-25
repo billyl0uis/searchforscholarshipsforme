@@ -8,6 +8,7 @@ Reads config.yaml, crawls all target sites, parses with LLM,
 stores results in SQLite, and sends a weekly email digest.
 """
 
+import argparse
 import asyncio
 import os
 import sys
@@ -36,10 +37,12 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def main():
+def main(dry_run: bool = False):
     print("=" * 60)
     print("Craft Scholarship Finder — starting run")
     print(f"Date: {date.today().isoformat()}")
+    if dry_run:
+        print("MODE: DRY RUN (first 3 sites only, DB and email skipped)")
     print("=" * 60)
 
     # ── Load config ──────────────────────────────────────────────
@@ -58,6 +61,10 @@ def main():
     if not targets:
         print("ERROR: No target URLs found in config.yaml under 'targets'")
         sys.exit(1)
+    if dry_run:
+        targets = targets[:3]
+        print(f"[dry-run] Limiting to first 3 targets")
+
     print(f"Targets:          {len(targets)} sites")
     print(f"Max crawl depth:  {max_depth}")
     print(f"Per-site timeout: {site_timeout}s")
@@ -103,13 +110,19 @@ def main():
 
     print(f"\nTotal opportunities found: {len(all_opportunities)}")
 
+    if dry_run:
+        print("\n── DRY RUN RESULTS ───────────────────────────────────────")
+        for opp in all_opportunities:
+            print(f"  [{opp.get('eligibility_match', '?')}] {opp.get('school')} — {opp.get('name')} ({opp.get('type')})")
+        print(f"\nDry run complete. {len(all_opportunities)} opportunities found. DB and email skipped.")
+        return
+
     # ── Store to DB ───────────────────────────────────────────────
     print("\n── DATABASE ──────────────────────────────────────────────")
     seen_ids = []
     counts = {"new": 0, "updated": 0}
 
     for opp in all_opportunities:
-        # Skip clearly non-eligible
         if opp.get("eligibility_match") == "not eligible":
             continue
         result = upsert_opportunity(opp)
@@ -170,6 +183,14 @@ def main():
 if __name__ == "__main__":
     import traceback
 
+    parser = argparse.ArgumentParser(description="Craft school scholarship crawler")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Crawl only the first 3 sites and print results; skip DB writes and email",
+    )
+    args = parser.parse_args()
+
     # Check required env vars
     missing = [v for v in ["GEMINI_API_KEY"] if not os.environ.get(v)]
     if missing:
@@ -177,13 +198,12 @@ if __name__ == "__main__":
         print("  GEMINI_API_KEY  — get a free key at https://aistudio.google.com")
         sys.exit(1)
 
-    # Log which optional vars are present
     sendgrid_present = bool(os.environ.get("SENDGRID_API_KEY"))
     print(f"[env] GEMINI_API_KEY: set")
     print(f"[env] SENDGRID_API_KEY: {'set' if sendgrid_present else 'NOT SET — digest will be saved locally'}")
 
     try:
-        main()
+        main(dry_run=args.dry_run)
     except Exception:
         print("\n" + "=" * 60)
         print("FATAL ERROR — full traceback:")

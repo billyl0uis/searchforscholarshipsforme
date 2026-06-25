@@ -8,8 +8,8 @@ email:
 
 crawl:
   max_depth: 3
-  per_site_timeout_seconds: 180
-  per_site_page_cap: 50
+  per_site_timeout_seconds: 120
+  per_site_page_cap: 30
   global_timeout_seconds: 14400
   internal_links_only: true
   keyword_flags:
