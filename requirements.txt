@@ -1,0 +1,9 @@
+anthropic
+playwright
+beautifulsoup4
+httpx
+lxml
+pdfplumber
+sendgrid
+pyyaml
+python-dateutil

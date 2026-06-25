@@ -1,0 +1,50 @@
+email:
+  recipient: info@billylouis.com
+  sender: noreply@billylouis.com
+
+crawl:
+  max_depth: 5
+  internal_links_only: true
+  keyword_flags:
+    - scholarship
+    - grant
+    - award
+    - fellowship
+    - assistantship
+    - work-study
+    - stipend
+    - funded
+    - tuition waiver
+    - emerging artist
+
+targets:
+  - https://www.urbanglass.org
+  - https://penland.org
+  - https://www.haystack-mtn.org
+  - https://www.pilchuck.com
+  - https://www.pittsburghglasscenter.org
+  - https://www.cmog.org
+  - https://www.pratt-finearts.org
+  - https://www.arrowmont.org
+  - https://www.petersvalley.org
+  - https://www.folkschool.org
+  - https://worcestercraft.org
+  - https://www.tntech.edu/craftcenter/
+  - https://www.swschool.org
+  - https://ox-bow.org
+  - https://watershedceramics.org
+  - https://snowfarm.org
+  - https://www.andersonranch.org
+  - https://mendocinoartcenter.org
+  - https://www.touchstonecrafts.org
+  - https://www.salemartworks.org
+  - https://www.sculpturespace.org
+  - https://thesteelyard.org
+  - https://www.northhouse.org
+  - https://snagmetalsmith.org
+  - https://craftcouncil.org
+  - https://jra.org
+  - https://fluxfactory.org
+  - https://brooklynmetalworks.com
+  - https://www.resartis.org
+  - https://www.artistcommunities.org

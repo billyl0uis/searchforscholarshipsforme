@@ -1,0 +1,43 @@
+name: Craft Scholarship Crawler
+
+on:
+  schedule:
+    - cron: '0 14 * * 0'  # Sunday 9am ET (UTC-5 in winter, UTC-4 in summer)
+  workflow_dispatch:
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Download previous database
+        uses: actions/download-artifact@v4
+        with:
+          name: scholarships-db
+          path: .
+        continue-on-error: true
+
+      - name: Run crawler
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+        run: python main.py
+
+      - name: Upload database
+        uses: actions/upload-artifact@v4
+        with:
+          name: scholarships-db
+          path: scholarships.db
+          retention-days: 90
