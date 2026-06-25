@@ -44,16 +44,17 @@ def main():
 
     # ── Load config ──────────────────────────────────────────────
     config = load_config()
-    targets = config["crawl"].get("targets", config.get("targets", []))
-    if not targets:
-        # targets may be at top level in config
-        targets = config.get("targets", [])
+    # targets lives at the top level of config.yaml
+    targets = config.get("targets") or config.get("crawl", {}).get("targets", [])
     max_depth = config["crawl"].get("max_depth", 5)
     internal_only = config["crawl"].get("internal_links_only", True)
     keyword_flags = config["crawl"].get("keyword_flags", [])
     recipient = config["email"]["recipient"]
     sender = config["email"]["sender"]
 
+    if not targets:
+        print("ERROR: No target URLs found in config.yaml under 'targets'")
+        sys.exit(1)
     print(f"Targets: {len(targets)} sites")
     print(f"Max crawl depth: {max_depth}")
 
@@ -154,10 +155,25 @@ def main():
 
 
 if __name__ == "__main__":
+    import traceback
+
     # Check required env vars
-    missing = [v for v in ["ANTHROPIC_API_KEY"] if not os.environ.get(v)]
+    missing = [v for v in ["GEMINI_API_KEY"] if not os.environ.get(v)]
     if missing:
         print(f"ERROR: Missing required environment variables: {', '.join(missing)}")
+        print("  GEMINI_API_KEY  — get a free key at https://aistudio.google.com")
         sys.exit(1)
 
-    main()
+    # Log which optional vars are present
+    sendgrid_present = bool(os.environ.get("SENDGRID_API_KEY"))
+    print(f"[env] GEMINI_API_KEY: set")
+    print(f"[env] SENDGRID_API_KEY: {'set' if sendgrid_present else 'NOT SET — digest will be saved locally'}")
+
+    try:
+        main()
+    except Exception:
+        print("\n" + "=" * 60)
+        print("FATAL ERROR — full traceback:")
+        print("=" * 60)
+        traceback.print_exc()
+        sys.exit(1)

@@ -16,28 +16,88 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
+          set -euo pipefail
+          echo "=== Installing pip dependencies ==="
+          pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install chromium
-          playwright install-deps chromium
+          echo "=== Installed packages ==="
+          pip list
 
-      - name: Download previous database
+      - name: Install Playwright browsers
+        run: |
+          set -euo pipefail
+          echo "=== Installing Playwright system deps ==="
+          playwright install-deps chromium
+          echo "=== Installing Playwright Chromium browser ==="
+          playwright install chromium
+          echo "=== Playwright install complete ==="
+
+      - name: Check environment
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "=== Environment check ==="
+          echo "Python version: $(python --version)"
+          echo "Working directory: $(pwd)"
+          echo "Files present: $(ls -la)"
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "ERROR: GEMINI_API_KEY secret is not set or is empty."
+            echo "Go to: Settings -> Secrets and variables -> Actions -> New repository secret"
+            echo "Add secret named GEMINI_API_KEY (free key from https://aistudio.google.com)"
+            exit 1
+          else
+            echo "GEMINI_API_KEY: set (length=${#GEMINI_API_KEY})"
+          fi
+          if [ -z "${SENDGRID_API_KEY:-}" ]; then
+            echo "WARNING: SENDGRID_API_KEY not set — digest will be saved to digest_preview.html instead of emailed"
+          else
+            echo "SENDGRID_API_KEY: set (length=${#SENDGRID_API_KEY})"
+          fi
+
+      - name: Download previous database (first run is OK if this fails)
+        id: download-db
         uses: actions/download-artifact@v4
         with:
           name: scholarships-db
           path: .
         continue-on-error: true
 
+      - name: Report database status
+        run: |
+          if [ -f "scholarships.db" ]; then
+            echo "=== Existing database found ==="
+            ls -lh scholarships.db
+          else
+            echo "=== No existing database — this is a first run, starting fresh ==="
+          fi
+
       - name: Run crawler
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
-        run: python main.py
+        run: |
+          set -euo pipefail
+          echo "=== Starting main crawler ==="
+          python main.py
+          echo "=== Crawler finished ==="
 
-      - name: Upload database
+      - name: Upload database artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scholarships-db
           path: scholarships.db
           retention-days: 90
+
+      - name: Upload email preview (if SendGrid not configured)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-preview
+          path: digest_preview.html
+          retention-days: 7
+        continue-on-error: true
