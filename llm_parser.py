@@ -1,7 +1,7 @@
 """
-llm_parser.py — Uses Claude to extract and filter scholarship opportunities.
+llm_parser.py — Uses Gemini to extract and filter scholarship opportunities.
 
-Calls claude-sonnet-4-6 via the Anthropic Python SDK.
+Calls gemini-1.5-flash via the google-generativeai Python SDK.
 """
 
 import json
@@ -10,11 +10,12 @@ import re
 import time
 from typing import Optional
 
-import anthropic
+import google.generativeai as genai
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+client = genai.GenerativeModel("gemini-1.5-flash")
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "gemini-1.5-flash"
 
 EXTRACT_SYSTEM = """You are a scholarship research assistant specializing in craft and fine arts programs.
 
@@ -90,13 +91,8 @@ def extract_opportunities(page: dict, retries: int = 2) -> list[dict]:
 
     for attempt in range(retries + 1):
         try:
-            response = client.messages.create(
-                model=MODEL,
-                max_tokens=2048,
-                system=EXTRACT_SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text
+            response = client.generate_content(f"{EXTRACT_SYSTEM}\n\n{prompt}")
+            raw = response.text
             cleaned = _clean_json(raw)
             opps = json.loads(cleaned)
             if not isinstance(opps, list):
@@ -112,14 +108,15 @@ def extract_opportunities(page: dict, retries: int = 2) -> list[dict]:
             if attempt == retries:
                 return []
             time.sleep(2)
-        except anthropic.RateLimitError:
-            print(f"  [Rate limit] sleeping 30s...")
-            time.sleep(30)
         except Exception as e:
-            print(f"  [LLM extract error] {url}: {e}")
-            if attempt == retries:
-                return []
-            time.sleep(3)
+            if "quota" in str(e).lower() or "rate" in str(e).lower():
+                print(f"  [Rate limit] sleeping 30s...")
+                time.sleep(30)
+            else:
+                print(f"  [LLM extract error] {url}: {e}")
+                if attempt == retries:
+                    return []
+                time.sleep(3)
 
     return []
 
@@ -142,13 +139,8 @@ def filter_opportunities(opps: list[dict], retries: int = 2) -> list[dict]:
 
         for attempt in range(retries + 1):
             try:
-                response = client.messages.create(
-                    model=MODEL,
-                    max_tokens=4096,
-                    system=FILTER_SYSTEM,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                raw = response.content[0].text
+                response = client.generate_content(f"{FILTER_SYSTEM}\n\n{prompt}")
+                raw = response.text
                 cleaned = _clean_json(raw)
                 filtered = json.loads(cleaned)
                 if isinstance(filtered, list):
@@ -160,23 +152,23 @@ def filter_opportunities(opps: list[dict], retries: int = 2) -> list[dict]:
             except json.JSONDecodeError as e:
                 print(f"  [Filter JSON error] batch {i}: {e}")
                 if attempt == retries:
-                    # Return batch unfiltered with unclear status
                     for opp in batch:
                         opp.setdefault("eligibility_match", "eligibility unclear — verify before applying")
                     all_filtered.extend(batch)
                 else:
                     time.sleep(2)
-            except anthropic.RateLimitError:
-                print(f"  [Rate limit] sleeping 30s...")
-                time.sleep(30)
             except Exception as e:
-                print(f"  [LLM filter error] batch {i}: {e}")
-                if attempt == retries:
-                    for opp in batch:
-                        opp.setdefault("eligibility_match", "eligibility unclear — verify before applying")
-                    all_filtered.extend(batch)
+                if "quota" in str(e).lower() or "rate" in str(e).lower():
+                    print(f"  [Rate limit] sleeping 30s...")
+                    time.sleep(30)
                 else:
-                    time.sleep(3)
+                    print(f"  [LLM filter error] batch {i}: {e}")
+                    if attempt == retries:
+                        for opp in batch:
+                            opp.setdefault("eligibility_match", "eligibility unclear — verify before applying")
+                        all_filtered.extend(batch)
+                    else:
+                        time.sleep(3)
 
     return all_filtered
 

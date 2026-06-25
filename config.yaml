@@ -2,6 +2,10 @@ email:
   recipient: info@billylouis.com
   sender: noreply@billylouis.com
 
+# API keys are read from environment variables / GitHub Actions secrets:
+#   GEMINI_API_KEY  — get a free key at aistudio.google.com
+#   SENDGRID_API_KEY — get one at sendgrid.com (free tier works)
+
 crawl:
   max_depth: 5
   internal_links_only: true

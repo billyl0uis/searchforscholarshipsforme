@@ -1,4 +1,4 @@
-anthropic
+google-generativeai
 playwright
 beautifulsoup4
 httpx

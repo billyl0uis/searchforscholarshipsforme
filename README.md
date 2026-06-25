@@ -2,7 +2,7 @@
 
 An automated weekly crawler that finds scholarships, fellowships, residencies, and funded opportunities at craft schools across the US — filtered specifically for merit-based, LGBTQ+/trans-affirming, and field-specific (glassblowing, metalsmithing, jewelry, blacksmithing, silversmithing, casting) programs.
 
-Every Sunday at 9am ET, GitHub Actions crawls 30 craft school websites, uses Claude (claude-sonnet-4-6) to extract and filter opportunities, stores results in SQLite, and sends a formatted HTML email digest.
+Every Sunday at 9am ET, GitHub Actions crawls 30 craft school websites, uses Gemini (gemini-1.5-flash, free tier) to extract and filter opportunities, stores results in SQLite, and sends a formatted HTML email digest.
 
 ---
 
@@ -24,7 +24,7 @@ Add these two secrets:
 
 | Secret name | Value |
 |---|---|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key (get one at console.anthropic.com) |
+| `GEMINI_API_KEY` | Your Gemini API key — get a free one at [aistudio.google.com](https://aistudio.google.com) |
 | `SENDGRID_API_KEY` | Your SendGrid API key (get one at sendgrid.com -- free tier works) |
 
 ### 3. Trigger a manual run
@@ -61,8 +61,8 @@ Commit and push the change -- it will take effect on the next run.
 - Only processes pages containing scholarship-related keywords
 
 ### LLM Parser (`llm_parser.py`)
-- Sends flagged pages to Claude (claude-sonnet-4-6) to extract opportunities as structured JSON
-- A second Claude call classifies each opportunity's eligibility match
+- Sends flagged pages to Gemini (gemini-1.5-flash, free tier) to extract opportunities as structured JSON
+- A second Gemini call classifies each opportunity's eligibility match
 
 ### Eligibility Profile
 The system filters for opportunities that match this profile:
@@ -118,8 +118,8 @@ requirements.txt  -- Python dependencies
 pip install -r requirements.txt
 playwright install chromium
 
-export ANTHROPIC_API_KEY=your_key_here
-export SENDGRID_API_KEY=your_key_here  # optional for local testing
+export GEMINI_API_KEY=your_key_here       # free at aistudio.google.com
+export SENDGRID_API_KEY=your_key_here    # optional for local testing
 
 python main.py
 ```
