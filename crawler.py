@@ -8,6 +8,7 @@ Parses linked PDFs with pdfplumber.
 import asyncio
 import io
 import re
+import time
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
@@ -46,6 +47,25 @@ PRIORITY_PATH_PATTERNS = [
     r"fund",
 ]
 
+# URL path segments and file extensions to skip entirely
+SKIP_PATH_SEGMENTS = {
+    "/cdn-cgi/", "/wp-json/", "/feed/", "/tag/", "/page/",
+    "/wp-content/uploads/", "/wp-includes/", "/xmlrpc",
+    "/trackback/", "/embed/", "/oembed/",
+}
+
+SKIP_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico",
+    ".woff", ".woff2", ".ttf", ".eot",
+    ".mp4", ".mp3", ".avi", ".mov", ".webm",
+    ".zip", ".tar", ".gz", ".exe", ".dmg",
+    ".css", ".js", ".map",
+}
+
+PER_SITE_TIMEOUT = 3 * 60       # 3 minutes per domain
+PER_SITE_PAGE_CAP = 50          # max pages crawled per domain
+GLOBAL_TIMEOUT = 4 * 60 * 60   # 4 hours total
+
 
 def _contains_keywords(text: str) -> bool:
     text_lower = text.lower()
@@ -57,10 +77,32 @@ def _is_priority_url(url: str) -> bool:
     return any(re.search(p, path) for p in PRIORITY_PATH_PATTERNS)
 
 
+def _should_skip_url(url: str) -> bool:
+    """Return True for URLs that are definitely not scholarship pages."""
+    parsed = urlparse(url)
+    path_lower = parsed.path.lower()
+
+    # Skip by extension
+    for ext in SKIP_EXTENSIONS:
+        if path_lower.endswith(ext):
+            return True
+
+    # Skip by path segment
+    for seg in SKIP_PATH_SEGMENTS:
+        if seg in path_lower:
+            return True
+
+    # Skip query-string-heavy WordPress pagination (?p=123, ?page_id=)
+    qs = parsed.query.lower()
+    if re.search(r"page_id=|p=\d+|replytocom=", qs):
+        return True
+
+    return False
+
+
 def _is_internal(base_url: str, link: str) -> bool:
     base_netloc = urlparse(base_url).netloc.lower()
     link_netloc = urlparse(link).netloc.lower()
-    # Allow same domain or subdomain
     return (
         link_netloc == base_netloc
         or link_netloc.endswith("." + base_netloc)
@@ -70,7 +112,6 @@ def _is_internal(base_url: str, link: str) -> bool:
 
 def _normalize_url(url: str) -> str:
     parsed = urlparse(url)
-    # Strip fragment
     return parsed._replace(fragment="").geturl()
 
 
@@ -85,6 +126,8 @@ def _extract_links(base_url: str, html: str, internal_only: bool = True) -> list
         if parsed.scheme not in ("http", "https"):
             continue
         if internal_only and not _is_internal(base_url, full):
+            continue
+        if _should_skip_url(full):
             continue
         links.append(full)
     return list(set(links))
@@ -158,7 +201,7 @@ def _fetch_pdf_text(url: str) -> Optional[str]:
         buf = io.BytesIO(resp.content)
         text_parts = []
         with pdfplumber.open(buf) as pdf:
-            for page in pdf.pages[:20]:  # limit pages
+            for page in pdf.pages[:20]:
                 t = page.extract_text()
                 if t:
                     text_parts.append(t)
@@ -170,12 +213,14 @@ def _fetch_pdf_text(url: str) -> Optional[str]:
 
 async def crawl_site(
     base_url: str,
-    max_depth: int = 5,
+    max_depth: int = 3,
     internal_links_only: bool = True,
     keyword_flags: Optional[list] = None,
+    site_timeout: int = PER_SITE_TIMEOUT,
+    page_cap: int = PER_SITE_PAGE_CAP,
 ) -> list[dict]:
     """
-    Crawl a site recursively up to max_depth.
+    Crawl a site recursively up to max_depth, with per-site timeout and page cap.
     Returns list of dicts: {url, html_text, page_type, school}
     """
     if keyword_flags:
@@ -185,28 +230,41 @@ async def crawl_site(
     school = urlparse(base_url).netloc.replace("www.", "")
     visited: set[str] = set()
     results: list[dict] = []
-    # Queue: (url, depth)
     queue: list[tuple[str, int]] = [(base_url, 0)]
+    site_start = time.monotonic()
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
         follow_redirects=True,
     ) as client:
         while queue:
+            # Per-site timeout check
+            elapsed = time.monotonic() - site_start
+            if elapsed >= site_timeout:
+                print(f"  [TIMEOUT] {school}: {site_timeout}s limit reached after {len(visited)} pages — moving on")
+                break
+
+            # Per-site page cap
+            if len(visited) >= page_cap:
+                print(f"  [CAP] {school}: {page_cap}-page limit reached — moving on")
+                break
+
             url, depth = queue.pop(0)
             url = _normalize_url(url)
 
             if url in visited:
                 continue
+            if _should_skip_url(url):
+                continue
+
             visited.add(url)
 
             if depth > max_depth:
                 continue
 
-            print(f"  Crawling [{depth}] {url}")
+            page_num = len(visited)
+            print(f"  [{page_num}/{page_cap}] depth={depth} {url}")
 
-            # Fetch page
-            html = None
             is_pdf = url.lower().endswith(".pdf")
 
             if is_pdf:
@@ -220,69 +278,82 @@ async def crawl_site(
                     })
                 continue
 
-            # Try static fetch first (faster)
             html = await _fetch_static(url, client)
 
-            # Fall back to Playwright for JS-heavy pages
             if html is None or len(html) < 500:
                 html = await _fetch_with_playwright(url)
 
             if not html:
                 continue
 
-            # Extract text
             soup = BeautifulSoup(html, "lxml")
             for tag in soup(["script", "style", "noscript"]):
                 tag.decompose()
             text = soup.get_text(separator=" ", strip=True)
 
-            # Only store pages with keywords
             if _contains_keywords(text):
                 page_type = _classify_page(url, text)
                 results.append({
                     "url": url,
-                    "html_text": text[:50000],  # cap at 50k chars
+                    "html_text": text[:50000],
                     "page_type": page_type,
                     "school": school,
                 })
+                print(f"    ✓ flagged ({page_type})")
 
             if depth < max_depth:
-                # Enqueue internal links
                 links = _extract_links(url, html, internal_links_only)
-                # Prioritize likely-relevant pages
                 priority = [l for l in links if _is_priority_url(l) and l not in visited]
                 regular = [l for l in links if not _is_priority_url(l) and l not in visited]
                 for link in priority + regular:
                     queue.append((link, depth + 1))
 
-                # Also fetch PDF links
                 for pdf_url in _extract_pdf_links(url, html):
                     if pdf_url not in visited:
                         queue.append((pdf_url, depth + 1))
 
-    print(f"  Done crawling {school}: {len(visited)} pages visited, {len(results)} flagged")
+    elapsed = time.monotonic() - site_start
+    print(f"  Done {school}: {len(visited)} pages in {elapsed:.0f}s, {len(results)} flagged")
     return results
 
 
 async def crawl_all_sites(
     targets: list[str],
-    max_depth: int = 5,
+    max_depth: int = 3,
     internal_links_only: bool = True,
     keyword_flags: Optional[list] = None,
+    site_timeout: int = PER_SITE_TIMEOUT,
+    page_cap: int = PER_SITE_PAGE_CAP,
+    global_timeout: int = GLOBAL_TIMEOUT,
 ) -> dict[str, list[dict]]:
-    """Crawl all target sites. Returns {base_url: [pages]}."""
+    """Crawl all target sites with a global timeout. Returns {base_url: [pages]}."""
     all_results = {}
-    for url in targets:
-        print(f"\nCrawling site: {url}")
+    global_start = time.monotonic()
+
+    for i, url in enumerate(targets, 1):
+        global_elapsed = time.monotonic() - global_start
+        if global_elapsed >= global_timeout:
+            print(f"\n[GLOBAL TIMEOUT] {global_timeout/3600:.1f}h limit reached after {i-1}/{len(targets)} sites — stopping crawl")
+            break
+
+        remaining = global_timeout - global_elapsed
+        effective_site_timeout = min(site_timeout, remaining)
+
+        print(f"\n[{i}/{len(targets)}] Crawling: {url}  (global elapsed: {global_elapsed/60:.1f}m)")
         try:
             pages = await crawl_site(
                 url,
                 max_depth=max_depth,
                 internal_links_only=internal_links_only,
                 keyword_flags=keyword_flags,
+                site_timeout=int(effective_site_timeout),
+                page_cap=page_cap,
             )
             all_results[url] = pages
         except Exception as e:
             print(f"  ERROR crawling {url}: {e}")
             all_results[url] = []
+
+    total_elapsed = time.monotonic() - global_start
+    print(f"\nCrawl complete: {len(all_results)}/{len(targets)} sites in {total_elapsed/60:.1f}m")
     return all_results

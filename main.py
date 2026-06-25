@@ -46,17 +46,23 @@ def main():
     config = load_config()
     # targets lives at the top level of config.yaml
     targets = config.get("targets") or config.get("crawl", {}).get("targets", [])
-    max_depth = config["crawl"].get("max_depth", 5)
+    max_depth = config["crawl"].get("max_depth", 3)
     internal_only = config["crawl"].get("internal_links_only", True)
     keyword_flags = config["crawl"].get("keyword_flags", [])
+    site_timeout = config["crawl"].get("per_site_timeout_seconds", 180)
+    page_cap = config["crawl"].get("per_site_page_cap", 50)
+    global_timeout = config["crawl"].get("global_timeout_seconds", 14400)
     recipient = config["email"]["recipient"]
     sender = config["email"]["sender"]
 
     if not targets:
         print("ERROR: No target URLs found in config.yaml under 'targets'")
         sys.exit(1)
-    print(f"Targets: {len(targets)} sites")
-    print(f"Max crawl depth: {max_depth}")
+    print(f"Targets:          {len(targets)} sites")
+    print(f"Max crawl depth:  {max_depth}")
+    print(f"Per-site timeout: {site_timeout}s")
+    print(f"Per-site page cap:{page_cap} pages")
+    print(f"Global timeout:   {global_timeout/3600:.1f}h")
 
     # ── Init DB ───────────────────────────────────────────────────
     if not os.path.exists(DB_PATH):
@@ -74,6 +80,9 @@ def main():
             max_depth=max_depth,
             internal_links_only=internal_only,
             keyword_flags=keyword_flags,
+            site_timeout=site_timeout,
+            page_cap=page_cap,
+            global_timeout=global_timeout,
         )
     )
 

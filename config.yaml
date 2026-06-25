@@ -7,7 +7,10 @@ email:
 #   SENDGRID_API_KEY — get one at sendgrid.com (free tier works)
 
 crawl:
-  max_depth: 5
+  max_depth: 3
+  per_site_timeout_seconds: 180
+  per_site_page_cap: 50
+  global_timeout_seconds: 14400
   internal_links_only: true
   keyword_flags:
     - scholarship
