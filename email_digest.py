@@ -162,7 +162,7 @@ def build_html_email(
 <p style="color:#999;font-size:11px;text-align:center;">
   Generated automatically by the Craft Scholarship Finder.
   Data sourced from 30 craft school websites. Verify all details directly with the schools.
-  <br>Powered by Claude claude-sonnet-4-6 + GitHub Actions.
+  <br>Powered by Gemini gemini-1.5-flash + GitHub Actions.
 </p>
 </body>
 </html>"""
