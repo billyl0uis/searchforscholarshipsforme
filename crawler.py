@@ -136,7 +136,7 @@ def _extract_pdf_links(base_url: str, html: str) -> list[str]:
 
 async def _head_ok(url: str, client: httpx.AsyncClient) -> bool:
     try:
-        r = await client.head(url, timeout=5, follow_redirects=True)
+        r = await client.head(url, timeout=3, follow_redirects=True)
         return r.status_code < 400
     except Exception:
         return False
@@ -230,12 +230,14 @@ async def _crawl_site_inner(base_url: str, depth: int) -> list[dict]:
                 headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
                 follow_redirects=True,
             ) as client:
-                # Phase 1: probe priority paths (HEAD only, 5s each)
-                probed = []
-                for path in PRIORITY_PATHS:
-                    u = _normalize(f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}{path}")
-                    if await _head_ok(u, client):
-                        probed.append(u)
+                # Phase 1: probe priority paths concurrently (3s timeout each)
+                origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+                probe_urls = [_normalize(origin + path) for path in PRIORITY_PATHS]
+                probe_results = await asyncio.gather(
+                    *[_head_ok(u, client) for u in probe_urls],
+                    return_exceptions=True,
+                )
+                probed = [u for u, ok in zip(probe_urls, probe_results) if ok is True]
                 print(f"  Priority paths found: {len(probed)}/{len(PRIORITY_PATHS)}")
 
                 queue = [(base_url, 0)] + [(u, 1) for u in probed]
@@ -276,7 +278,10 @@ async def _crawl_site_inner(base_url: str, depth: int) -> list[dict]:
                             if pdf_url not in visited:
                                 queue.append((pdf_url, d + 1))
         finally:
-            await browser.close()
+            try:
+                await asyncio.wait_for(browser.close(), timeout=5)
+            except Exception:
+                pass
 
     print(f"  Done: {len(visited)} pages visited, {len(results)} flagged")
     return results
