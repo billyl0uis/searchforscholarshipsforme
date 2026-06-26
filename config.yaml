@@ -8,9 +8,9 @@ email:
 
 crawl:
   max_depth: 3
-  per_site_timeout_seconds: 120
-  per_site_page_cap: 30
-  global_timeout_seconds: 14400
+  per_site_timeout_seconds: 90   # hard-coded in crawler.py via asyncio.wait_for()
+  per_site_page_cap: 20          # hard-coded in crawler.py
+  global_timeout_seconds: 2700   # 45 minutes — hard-coded in crawler.py
   internal_links_only: true
   keyword_flags:
     - scholarship

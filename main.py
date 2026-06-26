@@ -52,9 +52,9 @@ def main(dry_run: bool = False):
     max_depth = config["crawl"].get("max_depth", 3)
     internal_only = config["crawl"].get("internal_links_only", True)
     keyword_flags = config["crawl"].get("keyword_flags", [])
-    site_timeout = config["crawl"].get("per_site_timeout_seconds", 180)
-    page_cap = config["crawl"].get("per_site_page_cap", 50)
-    global_timeout = config["crawl"].get("global_timeout_seconds", 14400)
+    site_timeout = config["crawl"].get("per_site_timeout_seconds", 90)
+    page_cap = config["crawl"].get("per_site_page_cap", 20)
+    global_timeout = config["crawl"].get("global_timeout_seconds", 2700)
     recipient = config["email"]["recipient"]
     sender = config["email"]["sender"]
 
