@@ -142,45 +142,66 @@ async def _head_ok(url: str, client: httpx.AsyncClient) -> bool:
         return False
 
 
+PAGE_TIMEOUT = 15  # seconds — hard cap per individual page fetch
+
+
 async def _fetch_html(url: str, client: httpx.AsyncClient) -> Optional[str]:
-    try:
-        r = await client.get(url, timeout=15, follow_redirects=True)
+    async def _get():
+        r = await client.get(url, timeout=httpx.Timeout(10.0), follow_redirects=True)
         r.raise_for_status()
         ct = r.headers.get("content-type", "")
         if "html" in ct or not ct:
             return r.text
+        return None
+    try:
+        return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
+    except asyncio.TimeoutError:
+        print(f"    [TIMEOUT] Skipping {url} after {PAGE_TIMEOUT}s")
+        return None
     except Exception as e:
         print(f"    [fetch error] {e}")
-    return None
+        return None
 
 
-async def _fetch_html_playwright(url: str) -> Optional[str]:
+async def _fetch_html_playwright(url: str, browser) -> Optional[str]:
+    """Fetch a JS-rendered page using an already-open browser instance."""
+    async def _get():
+        page = await browser.new_page()
+        try:
+            await page.goto(url, timeout=15000, wait_until="domcontentloaded")
+            return await page.content()
+        finally:
+            await page.close()
     try:
-        from playwright.async_api import async_playwright
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(url, timeout=20000, wait_until="domcontentloaded")
-            await asyncio.sleep(1)
-            html = await page.content()
-            await browser.close()
-            return html
+        return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
+    except asyncio.TimeoutError:
+        print(f"    [TIMEOUT] Skipping {url} after {PAGE_TIMEOUT}s (playwright)")
+        return None
     except Exception as e:
         print(f"    [playwright error] {e}")
         return None
 
 
-def _fetch_pdf(url: str) -> Optional[str]:
+async def _fetch_pdf(url: str) -> Optional[str]:
+    """Fetch and parse a PDF — runs blocking pdfplumber in a thread executor."""
+    async def _get():
+        loop = asyncio.get_event_loop()
+        def _sync():
+            r = httpx.get(url, timeout=10, follow_redirects=True)
+            r.raise_for_status()
+            parts = []
+            with pdfplumber.open(io.BytesIO(r.content)) as pdf:
+                for pg in pdf.pages[:10]:
+                    t = pg.extract_text()
+                    if t:
+                        parts.append(t)
+            return "\n".join(parts)
+        return await loop.run_in_executor(None, _sync)
     try:
-        r = httpx.get(url, timeout=15, follow_redirects=True)
-        r.raise_for_status()
-        parts = []
-        with pdfplumber.open(io.BytesIO(r.content)) as pdf:
-            for pg in pdf.pages[:10]:
-                t = pg.extract_text()
-                if t:
-                    parts.append(t)
-        return "\n".join(parts)
+        return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
+    except asyncio.TimeoutError:
+        print(f"    [TIMEOUT] Skipping {url} after {PAGE_TIMEOUT}s (pdf)")
+        return None
     except Exception as e:
         print(f"    [pdf error] {e}")
         return None
@@ -194,64 +215,68 @@ def _page_text(html: str) -> str:
 
 
 async def _crawl_site_inner(base_url: str, depth: int) -> list[dict]:
-    """Core crawl logic — called inside asyncio.wait_for()."""
+    """Core crawl logic — called inside asyncio.wait_for() in crawl_site()."""
+    from playwright.async_api import async_playwright
+
     school = urlparse(base_url).netloc.replace("www.", "")
     visited: set[str] = set()
     results: list[dict] = []
-    # queue: (url, current_depth)
     queue: list[tuple[str, int]] = []
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
-        follow_redirects=True,
-    ) as client:
-        # Phase 1: probe priority paths
-        probed = []
-        for path in PRIORITY_PATHS:
-            url = _normalize(f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}{path}")
-            if await _head_ok(url, client):
-                probed.append(url)
-        print(f"  Priority paths found: {len(probed)}/{len(PRIORITY_PATHS)}")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
+                follow_redirects=True,
+            ) as client:
+                # Phase 1: probe priority paths (HEAD only, 5s each)
+                probed = []
+                for path in PRIORITY_PATHS:
+                    u = _normalize(f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}{path}")
+                    if await _head_ok(u, client):
+                        probed.append(u)
+                print(f"  Priority paths found: {len(probed)}/{len(PRIORITY_PATHS)}")
 
-        # Homepage first, then priority hits, then general
-        queue = [(base_url, 0)] + [(u, 1) for u in probed]
+                queue = [(base_url, 0)] + [(u, 1) for u in probed]
 
-        while queue and len(visited) < PAGE_CAP:
-            url, d = queue.pop(0)
-            url = _normalize(url)
-            if url in visited or _should_skip(url):
-                continue
-            visited.add(url)
+                while queue and len(visited) < PAGE_CAP:
+                    url, d = queue.pop(0)
+                    url = _normalize(url)
+                    if url in visited or _should_skip(url):
+                        continue
+                    visited.add(url)
 
-            n = len(visited)
-            print(f"  [{n}/{PAGE_CAP}] {url}")
+                    n = len(visited)
+                    print(f"  [{n}/{PAGE_CAP}] {url}")
 
-            # PDF
-            if url.lower().endswith(".pdf"):
-                text = _fetch_pdf(url)
-                if text and _contains_content_keywords(text):
-                    results.append({"url": url, "html_text": text, "page_type": "pdf", "school": school})
-                    print(f"    ✓ pdf flagged")
-                continue
+                    if url.lower().endswith(".pdf"):
+                        text = await _fetch_pdf(url)
+                        if text and _contains_content_keywords(text):
+                            results.append({"url": url, "html_text": text, "page_type": "pdf", "school": school})
+                            print(f"    ✓ pdf flagged")
+                        continue
 
-            html = await _fetch_html(url, client)
-            if html is None or len(html) < 300:
-                html = await _fetch_html_playwright(url)
-            if not html:
-                continue
+                    html = await _fetch_html(url, client)
+                    if html is None or len(html) < 300:
+                        html = await _fetch_html_playwright(url, browser)
+                    if not html:
+                        continue
 
-            text = _page_text(html)
-            if _contains_content_keywords(text):
-                results.append({"url": url, "html_text": text[:40000], "page_type": "page", "school": school})
-                print(f"    ✓ flagged")
+                    text = _page_text(html)
+                    if _contains_content_keywords(text):
+                        results.append({"url": url, "html_text": text[:40000], "page_type": "page", "school": school})
+                        print(f"    ✓ flagged")
 
-            if d < depth and len(visited) < PAGE_CAP:
-                for link_url, anchor in _extract_links(base_url, html):
-                    if link_url not in visited:
-                        queue.append((link_url, d + 1))
-                for pdf_url in _extract_pdf_links(base_url, html):
-                    if pdf_url not in visited:
-                        queue.append((pdf_url, d + 1))
+                    if d < depth and len(visited) < PAGE_CAP:
+                        for link_url, anchor in _extract_links(base_url, html):
+                            if link_url not in visited:
+                                queue.append((link_url, d + 1))
+                        for pdf_url in _extract_pdf_links(base_url, html):
+                            if pdf_url not in visited:
+                                queue.append((pdf_url, d + 1))
+        finally:
+            await browser.close()
 
     print(f"  Done: {len(visited)} pages visited, {len(results)} flagged")
     return results
