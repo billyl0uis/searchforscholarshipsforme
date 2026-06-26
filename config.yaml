@@ -1,6 +1,6 @@
 email:
   recipient: info@billylouis.com
-  sender: noreply@billylouis.com
+  sender: bailey.lou.wheeler@icloud.com
 
 # API keys are read from environment variables / GitHub Actions secrets:
 #   GEMINI_API_KEY  — get a free key at aistudio.google.com
