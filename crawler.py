@@ -76,13 +76,15 @@ SKIP_SUBDOMAINS = {
     "api", "dev", "staging", "sandbox", "test",
 }
 
-# URL path segments to skip
+# URL path segments to skip — none of these ever contain scholarship info
 SKIP_PATH_SEGMENTS = {
     "/cdn-cgi/", "/wp-json/", "/feed/", "/tag/", "/page/",
     "/wp-content/uploads/", "/wp-includes/", "/xmlrpc",
     "/trackback/", "/embed/", "/oembed/", "/cart/", "/checkout/",
     "/store/", "/shop/", "/product/", "/author/", "/staff/",
-    "/calendar/", "/event/", "/ticket/", "/donate/", "/give/",
+    "/faculty/", "/people/", "/calendar/", "/events/", "/event/",
+    "/ticket/", "/donate/", "/give/", "/blog/", "/news/",
+    "/gallery/", "/archive/", "/resources/",
 }
 
 SKIP_EXTENSIONS = {
@@ -148,6 +150,11 @@ def _should_skip_url(url: str) -> bool:
     parsed = urlparse(url)
     path_lower = parsed.path.lower()
 
+    # Skip any URL with a query string — ?type= / ?focus= etc. generate
+    # infinite variations and cause the crawler to loop forever
+    if parsed.query:
+        return True
+
     for ext in SKIP_EXTENSIONS:
         if path_lower.endswith(ext):
             return True
@@ -155,10 +162,6 @@ def _should_skip_url(url: str) -> bool:
     for seg in SKIP_PATH_SEGMENTS:
         if seg in path_lower:
             return True
-
-    qs = parsed.query.lower()
-    if re.search(r"page_id=|p=\d+|replytocom=", qs):
-        return True
 
     return False
 
