@@ -51,7 +51,7 @@ targets:
   - https://snagmetalsmith.org
   - https://craftcouncil.org
   - https://jra.org
-  - https://fluxfactory.org
-  - https://brooklynmetalworks.com
+  # - https://fluxfactory.org        # removed: hangs crawler
+  # - https://brooklynmetalworks.com  # removed: hangs crawler
   - https://www.resartis.org
   - https://www.artistcommunities.org

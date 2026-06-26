@@ -156,29 +156,37 @@ async def _fetch_html(url: str, client: httpx.AsyncClient) -> Optional[str]:
     try:
         return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
     except asyncio.TimeoutError:
-        print(f"    [TIMEOUT] Skipping {url} after {PAGE_TIMEOUT}s")
+        print(f"    [SKIP] {url} — timeout after {PAGE_TIMEOUT}s")
         return None
     except Exception as e:
-        print(f"    [fetch error] {e}")
+        print(f"    [SKIP] {url} — fetch: {e}")
         return None
 
 
 async def _fetch_html_playwright(url: str, browser) -> Optional[str]:
     """Fetch a JS-rendered page using an already-open browser instance."""
+    from playwright.async_api import Error as PlaywrightError
+
     async def _get():
         page = await browser.new_page()
         try:
             await page.goto(url, timeout=15000, wait_until="domcontentloaded")
             return await page.content()
         finally:
-            await page.close()
+            try:
+                await page.close()
+            except Exception:
+                pass
     try:
         return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
     except asyncio.TimeoutError:
-        print(f"    [TIMEOUT] Skipping {url} after {PAGE_TIMEOUT}s (playwright)")
+        print(f"    [SKIP] {url} — timeout after {PAGE_TIMEOUT}s")
+        return None
+    except PlaywrightError as e:
+        print(f"    [SKIP] {url} — playwright: {e}")
         return None
     except Exception as e:
-        print(f"    [playwright error] {e}")
+        print(f"    [SKIP] {url} — {e}")
         return None
 
 
@@ -200,10 +208,10 @@ async def _fetch_pdf(url: str) -> Optional[str]:
     try:
         return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
     except asyncio.TimeoutError:
-        print(f"    [TIMEOUT] Skipping {url} after {PAGE_TIMEOUT}s (pdf)")
+        print(f"    [SKIP] {url} — pdf timeout after {PAGE_TIMEOUT}s")
         return None
     except Exception as e:
-        print(f"    [pdf error] {e}")
+        print(f"    [SKIP] {url} — pdf: {e}")
         return None
 
 
@@ -224,7 +232,11 @@ async def _crawl_site_inner(base_url: str, depth: int) -> list[dict]:
     queue: list[tuple[str, int]] = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        try:
+            browser = await asyncio.wait_for(p.chromium.launch(headless=True), timeout=30)
+        except Exception as e:
+            print(f"  [SKIP] browser launch failed: {e}")
+            return results
         try:
             async with httpx.AsyncClient(
                 headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
