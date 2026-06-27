@@ -28,7 +28,7 @@ targets:
   - https://www.urbanglass.org
   - https://penland.org
   - https://www.haystack-mtn.org
-  - https://www.pilchuck.com
+  # - https://www.pilchuck.com         # blacklisted: timeout every run
   - https://www.pittsburghglasscenter.org
   - https://www.cmog.org
   - https://www.pratt-finearts.org
@@ -49,5 +49,5 @@ targets:
   - https://thesteelyard.org
   - https://www.northhouse.org
   # - https://brooklynmetalworks.com  # blacklisted: hangs crawler
-  - https://www.resartis.org
-  - https://www.artistcommunities.org
+  # - https://www.resartis.org           # blacklisted: hangs crawler
+  # - https://www.artistcommunities.org  # blacklisted: hangs crawler
