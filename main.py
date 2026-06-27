@@ -136,28 +136,30 @@ def main(dry_run: bool = False):
     all_active = get_all_active()
     deactivated = get_recently_deactivated()
 
-    print(f"New this week: {len(new_today)}")
-    print(f"Upcoming deadlines (30d): {len(upcoming)}")
-    print(f"All active: {len(all_active)}")
-    print(f"Recently removed: {len(deactivated)}")
+    print(f"[EMAIL] {len(all_active)} opportunities found in DB")
+    print(f"[EMAIL] New this week: {len(new_today)}")
+    print(f"[EMAIL] Upcoming deadlines (30d): {len(upcoming)}")
+    print(f"[EMAIL] Recently removed: {len(deactivated)}")
 
     html_body = build_html_email(new_today, upcoming, all_active, deactivated)
 
     # ── Send Email ────────────────────────────────────────────────
+    print(f"[EMAIL] Preparing to send digest to {recipient}")
+
     if not os.environ.get("SENDGRID_API_KEY"):
-        print("WARNING: SENDGRID_API_KEY not set — skipping email send")
+        print("[EMAIL] WARNING: SENDGRID_API_KEY not set — saving digest locally instead")
         with open("digest_preview.html", "w") as f:
             f.write(html_body)
-        print("Digest saved to digest_preview.html")
+        print("[EMAIL] Digest saved to digest_preview.html")
     else:
         try:
             success = send_digest(html_body, recipient=recipient, sender=sender)
             if success:
-                print(f"Digest sent to {recipient}")
+                print(f"[EMAIL] Digest sent successfully to {recipient}")
             else:
-                print("Email send failed (non-success status)")
+                print(f"[EMAIL] Send failed — check SendGrid response above")
         except Exception as e:
-            print(f"Email send error: {e}")
+            print(f"[EMAIL] Exception during send: {type(e).__name__}: {e}")
 
     # ── Summary ───────────────────────────────────────────────────
     print("\n── SUMMARY ───────────────────────────────────────────────")

@@ -191,5 +191,9 @@ def send_digest(
 
     sg = sendgrid.SendGridAPIClient(api_key=api_key)
     response = sg.send(message)
-    print(f"Email sent: status {response.status_code}")
-    return response.status_code in (200, 202)
+    print(f"[EMAIL] SendGrid response: {response.status_code}")
+    if response.status_code not in (200, 202):
+        print(f"[EMAIL] Error response body: {response.body}")
+        print(f"[EMAIL] Error response headers: {dict(response.headers)}")
+        return False
+    return True
