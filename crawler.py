@@ -159,7 +159,6 @@ async def _get_pdf(url: str, client: httpx.AsyncClient) -> Optional[str]:
     try:
         r = await client.get(url, follow_redirects=True)
         r.raise_for_status()
-        loop = asyncio.get_event_loop()
         content = r.content
 
         def _parse():
@@ -171,9 +170,16 @@ async def _get_pdf(url: str, client: httpx.AsyncClient) -> Optional[str]:
                         parts.append(t)
             return "\n".join(parts)
 
-        return await loop.run_in_executor(None, _parse)
+        # 20s cap on PDF parsing — pdfplumber can hang on malformed PDFs
+        return await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _parse),
+            timeout=20.0,
+        )
+    except asyncio.TimeoutError:
+        print(f"    [SKIP] {url} — pdf parse timeout (20s)")
+        return None
     except httpx.TimeoutException:
-        print(f"    [SKIP] {url} — pdf timeout")
+        print(f"    [SKIP] {url} — pdf download timeout")
         return None
     except Exception as e:
         print(f"    [SKIP] {url} — pdf {type(e).__name__}: {e}")
@@ -214,9 +220,10 @@ async def _crawl_site_inner(base_url: str, depth: int) -> list[dict]:
                 continue
             visited.add(url)
 
-            print(f"  [{len(visited)}/{PAGE_CAP}] {url}")
+            print(f"  [{len(visited)}/{PAGE_CAP}] {url}", flush=True)
 
             if url.lower().endswith(".pdf"):
+                print(f"    [PDF] fetching...", flush=True)
                 text = await _get_pdf(url, client)
                 if text and _contains_content_keywords(text):
                     results.append({"url": url, "html_text": text, "page_type": "pdf", "school": school})
