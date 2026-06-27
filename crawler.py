@@ -132,7 +132,7 @@ def _extract_pdf_links(base_url: str, html: str) -> list[str]:
 
 
 async def _get(url: str, client: httpx.AsyncClient) -> Optional[str]:
-    """Fetch a URL. Returns HTML text or None. Never raises."""
+    """Fetch a URL. Returns HTML text or None. Never raises, never retries."""
     try:
         r = await client.get(url, follow_redirects=True)
         r.raise_for_status()
@@ -142,6 +142,12 @@ async def _get(url: str, client: httpx.AsyncClient) -> Optional[str]:
         return None
     except httpx.TimeoutException:
         print(f"    [SKIP] {url} — timeout after {REQUEST_TIMEOUT}s")
+        return None
+    except httpx.HTTPStatusError as e:
+        print(f"    [SKIP] {url} — HTTP {e.response.status_code}")
+        return None
+    except httpx.ConnectError as e:
+        print(f"    [SKIP] {url} — connection/SSL error: {e}")
         return None
     except Exception as e:
         print(f"    [SKIP] {url} — {type(e).__name__}: {e}")

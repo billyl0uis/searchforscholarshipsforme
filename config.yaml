@@ -48,10 +48,10 @@ targets:
   - https://www.sculpturespace.org
   - https://thesteelyard.org
   - https://www.northhouse.org
-  - https://snagmetalsmith.org
-  - https://craftcouncil.org
-  - https://jra.org
-  # - https://fluxfactory.org        # removed: hangs crawler
-  # - https://brooklynmetalworks.com  # removed: hangs crawler
+  # - https://snagmetalsmith.org      # blacklisted: hangs crawler
+  # - https://craftcouncil.org        # blacklisted: 403 every run
+  # - https://jra.org                 # blacklisted: SSL errors
+  # - https://fluxfactory.org         # blacklisted: hangs crawler
+  # - https://brooklynmetalworks.com  # blacklisted: hangs crawler
   - https://www.resartis.org
   - https://www.artistcommunities.org
