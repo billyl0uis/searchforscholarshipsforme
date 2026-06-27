@@ -1,7 +1,7 @@
 """
 llm_parser.py — Uses Gemini to extract and filter scholarship opportunities.
 
-Calls gemini-1.5-flash via the google-generativeai Python SDK.
+Calls gemini-1.5-flash via the google-genai Python SDK.
 """
 
 import json
@@ -10,10 +10,9 @@ import re
 import time
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
 
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-client = genai.GenerativeModel("gemini-1.5-flash")
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL = "gemini-1.5-flash"
 
@@ -91,7 +90,7 @@ def extract_opportunities(page: dict, retries: int = 2) -> list[dict]:
 
     for attempt in range(retries + 1):
         try:
-            response = client.generate_content(f"{EXTRACT_SYSTEM}\n\n{prompt}")
+            response = client.models.generate_content(model=MODEL, contents=f"{EXTRACT_SYSTEM}\n\n{prompt}")
             raw = response.text
             cleaned = _clean_json(raw)
             opps = json.loads(cleaned)
@@ -139,7 +138,7 @@ def filter_opportunities(opps: list[dict], retries: int = 2) -> list[dict]:
 
         for attempt in range(retries + 1):
             try:
-                response = client.generate_content(f"{FILTER_SYSTEM}\n\n{prompt}")
+                response = client.models.generate_content(model=MODEL, contents=f"{FILTER_SYSTEM}\n\n{prompt}")
                 raw = response.text
                 cleaned = _clean_json(raw)
                 filtered = json.loads(cleaned)
