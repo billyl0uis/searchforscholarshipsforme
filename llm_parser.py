@@ -30,8 +30,8 @@ def _get_client() -> "genai.Client":
 MODEL = "gemini-1.5-flash"
 LLM_TIMEOUT = 60      # seconds per Gemini call
 PAGE_LIMIT = 150      # max pages sent to Gemini per run
-RATE_DELAY = 4.0      # seconds between calls (free tier = 15 req/min)
-DEBUG_PAGES = 3       # print raw response for first N pages
+RATE_DELAY = 4.0      # seconds between calls (15 req/min free tier = 4s gap)
+DEBUG_PAGES = 3       # kept for legacy, raw response now always logged
 
 # Higher score = crawled first
 URL_PRIORITY = [
@@ -121,11 +121,16 @@ def _prioritize_pages(pages: list[dict], limit: int = PAGE_LIMIT) -> list[dict]:
     return sorted_pages
 
 
-async def _gemini_call(prompt: str) -> str:
-    """Run a blocking Gemini call in a thread, with 30s timeout."""
+async def _gemini_call(prompt: str, debug_label: str = "") -> str:
+    """Run a blocking Gemini call in a thread, with LLM_TIMEOUT cap."""
+    raw_text: list[str] = []
+
     def _sync():
         response = _get_client().models.generate_content(model=MODEL, contents=prompt)
-        return response.text
+        text = response.text
+        raw_text.append(text)
+        print(f"  [LLM DEBUG] Raw response{' (' + debug_label + ')' if debug_label else ''}: {text[:300]}", flush=True)
+        return text
 
     return await asyncio.wait_for(
         asyncio.to_thread(_sync),
@@ -142,15 +147,15 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
     if not text or len(text) < 100:
         return []
 
-    print(f"  [LLM] Parsing page {index}/{total}: {url}")
+    print(f"  [LLM] Parsing page {index}/{total}: {url}", flush=True)
 
     prompt = f"{EXTRACT_SYSTEM}\n\nSource URL: {url}\nSchool: {school}\n\nPage content:\n{text[:12000]}"
 
-    try:
-        raw = await _gemini_call(prompt)
+    if index == 1:
+        print(f"  [LLM DEBUG] Prompt sent (first 500 chars): {prompt[:500]}", flush=True)
 
-        if index <= DEBUG_PAGES:
-            print(f"  [LLM DEBUG] Raw response (first 500 chars): {raw[:500]}")
+    try:
+        raw = await _gemini_call(prompt, debug_label=f"page {index}/{total}")
 
         cleaned = _clean_json(raw)
         opps = json.loads(cleaned)
@@ -177,10 +182,10 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
         return []
     except Exception as e:
         if "quota" in str(e).lower() or "rate" in str(e).lower():
-            print(f"  [LLM rate limit] sleeping 60s...")
-            await asyncio.sleep(60)
+            print(f"  [LLM rate limit] sleeping 30s before retry...", flush=True)
+            await asyncio.sleep(30)
         else:
-            print(f"  [LLM error] {url}: {type(e).__name__}: {e}")
+            print(f"  [LLM error] {url}: {type(e).__name__}: {e}", flush=True)
         return []
 
 
