@@ -18,9 +18,10 @@ from google import genai
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL = "gemini-1.5-flash"
-LLM_TIMEOUT = 30      # seconds per Gemini call
+LLM_TIMEOUT = 60      # seconds per Gemini call
 PAGE_LIMIT = 150      # max pages sent to Gemini per run
-RATE_DELAY = 1.0      # seconds between calls (free tier)
+RATE_DELAY = 4.0      # seconds between calls (free tier = 15 req/min)
+DEBUG_PAGES = 3       # print raw response for first N pages
 
 # Higher score = crawled first
 URL_PRIORITY = [
@@ -137,27 +138,39 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
 
     try:
         raw = await _gemini_call(prompt)
+
+        if index <= DEBUG_PAGES:
+            print(f"  [LLM DEBUG] Raw response (first 500 chars): {raw[:500]}")
+
         cleaned = _clean_json(raw)
         opps = json.loads(cleaned)
+
         if not isinstance(opps, list):
+            print(f"  [LLM DEBUG] Non-list response for {url}: {type(opps)}")
             return []
+        if len(opps) == 0:
+            print(f"  [LLM DEBUG] Empty result for {url}")
+            return []
+
         for opp in opps:
             opp["school"] = school
             if not opp.get("url"):
                 opp["url"] = url
+        print(f"  [LLM] Found {len(opps)} opportunities at {url}")
         return opps
     except asyncio.TimeoutError:
-        print(f"  [LLM TIMEOUT] skipped {url}")
+        print(f"  [LLM TIMEOUT] skipped {url} after {LLM_TIMEOUT}s")
         return []
     except json.JSONDecodeError as e:
         print(f"  [LLM JSON error] {url}: {e}")
+        print(f"  [LLM DEBUG] Raw that failed to parse: {raw[:300] if 'raw' in dir() else 'N/A'}")
         return []
     except Exception as e:
         if "quota" in str(e).lower() or "rate" in str(e).lower():
-            print(f"  [LLM rate limit] sleeping 30s...")
-            await asyncio.sleep(30)
+            print(f"  [LLM rate limit] sleeping 60s...")
+            await asyncio.sleep(60)
         else:
-            print(f"  [LLM error] {url}: {e}")
+            print(f"  [LLM error] {url}: {type(e).__name__}: {e}")
         return []
 
 
