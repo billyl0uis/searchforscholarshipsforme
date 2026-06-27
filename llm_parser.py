@@ -15,7 +15,9 @@ from urllib.parse import urlparse
 
 from google import genai
 
+print("[DEBUG] Initializing Gemini client...")
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+print("[DEBUG] Gemini client ready")
 
 MODEL = "gemini-1.5-flash"
 LLM_TIMEOUT = 60      # seconds per Gemini call
@@ -231,11 +233,14 @@ async def parse_and_filter_pages(pages: list[dict]) -> list[dict]:
     Full async pipeline: prioritize → extract → deduplicate → filter.
     Caps at PAGE_LIMIT pages, sorted by URL keyword relevance.
     """
+    print(f"[DEBUG] parse_and_filter_pages entered, {len(pages)} pages received")
     pages = _prioritize_pages(pages)
     total = len(pages)
+    print(f"[DEBUG] After prioritization: {total} pages to parse")
     all_opps = []
     seen: set[tuple] = set()
 
+    print(f"[DEBUG] Starting page loop...")
     for i, page in enumerate(pages, 1):
         opps = await extract_opportunities(page, i, total)
         for opp in opps:

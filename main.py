@@ -96,9 +96,18 @@ def main(dry_run: bool = False):
     # ── Parse & Filter ────────────────────────────────────────────
     print("\n── LLM PARSING ───────────────────────────────────────────")
     all_pages = [p for pages in site_pages.values() for p in pages]
-    print(f"Total flagged pages across all sites: {len(all_pages)}")
+    print(f"[DEBUG] Crawl complete, starting LLM phase")
+    print(f"[DEBUG] Number of flagged pages to parse: {len(all_pages)}")
 
-    all_opportunities = asyncio.run(parse_and_filter_pages(all_pages))
+    try:
+        print(f"[DEBUG] Calling asyncio.run(parse_and_filter_pages)...")
+        all_opportunities = asyncio.run(parse_and_filter_pages(all_pages))
+        print(f"[DEBUG] asyncio.run completed successfully")
+    except Exception:
+        import traceback
+        print("[DEBUG] EXCEPTION in LLM phase — full traceback:")
+        traceback.print_exc()
+        all_opportunities = []
 
     print(f"\nTotal opportunities found: {len(all_opportunities)}")
 
