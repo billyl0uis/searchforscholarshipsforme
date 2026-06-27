@@ -93,20 +93,12 @@ def main(dry_run: bool = False):
         )
     )
 
-    total_pages = sum(len(pages) for pages in site_pages.values())
-    print(f"\nTotal flagged pages: {total_pages}")
-
     # ── Parse & Filter ────────────────────────────────────────────
     print("\n── LLM PARSING ───────────────────────────────────────────")
-    all_opportunities = []
+    all_pages = [p for pages in site_pages.values() for p in pages]
+    print(f"Total flagged pages across all sites: {len(all_pages)}")
 
-    for base_url, pages in site_pages.items():
-        if not pages:
-            continue
-        print(f"\nParsing {len(pages)} pages from {base_url}...")
-        opps = parse_and_filter_pages(pages)
-        print(f"  Extracted {len(opps)} opportunities")
-        all_opportunities.extend(opps)
+    all_opportunities = asyncio.run(parse_and_filter_pages(all_pages))
 
     print(f"\nTotal opportunities found: {len(all_opportunities)}")
 
@@ -170,7 +162,7 @@ def main(dry_run: bool = False):
     # ── Summary ───────────────────────────────────────────────────
     print("\n── SUMMARY ───────────────────────────────────────────────")
     print(f"Sites crawled:    {len(targets)}")
-    print(f"Pages flagged:    {total_pages}")
+    print(f"Pages flagged:    {len(all_pages)}")
     print(f"Opps extracted:   {len(all_opportunities)}")
     print(f"New this week:    {counts['new']}")
     print(f"Updated:          {counts['updated']}")

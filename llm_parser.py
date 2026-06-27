@@ -1,20 +1,43 @@
 """
 llm_parser.py — Uses Gemini to extract and filter scholarship opportunities.
 
-Calls gemini-1.5-flash via the google-genai Python SDK.
+All Gemini calls are async via asyncio.to_thread() so they can be
+interrupted by asyncio.wait_for(). Includes per-call 30s timeout,
+1s rate-limit delay between calls, and a 150-page batch cap.
 """
 
+import asyncio
 import json
 import os
 import re
 import time
-from typing import Optional
+from urllib.parse import urlparse
 
 from google import genai
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL = "gemini-1.5-flash"
+LLM_TIMEOUT = 30      # seconds per Gemini call
+PAGE_LIMIT = 150      # max pages sent to Gemini per run
+RATE_DELAY = 1.0      # seconds between calls (free tier)
+
+# Higher score = crawled first
+URL_PRIORITY = [
+    ("scholarship", 6),
+    ("assistantship", 6),
+    ("fellowship", 6),
+    ("residenc", 6),
+    ("financial", 5),
+    ("award", 4),
+    ("grant", 4),
+    ("stipend", 4),
+    ("fund", 3),
+    ("opportunit", 3),
+    ("apply", 2),
+    ("support", 1),
+    ("tuition", 1),
+]
 
 EXTRACT_SYSTEM = """You are a scholarship research assistant specializing in craft and fine arts programs.
 
@@ -63,19 +86,44 @@ Return ONLY a valid JSON array of the same opportunities with eligibility_match 
 
 
 def _clean_json(text: str) -> str:
-    """Strip markdown code fences if present."""
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
 
-def extract_opportunities(page: dict, retries: int = 2) -> list[dict]:
-    """
-    Extract opportunities from a single crawled page using Claude.
-    Only calls API if page contains keyword flags.
-    Returns list of opportunity dicts.
-    """
+def _url_priority_score(page: dict) -> int:
+    path = urlparse(page.get("url", "")).path.lower()
+    score = 0
+    for keyword, weight in URL_PRIORITY:
+        if keyword in path:
+            score += weight
+    return score
+
+
+def _prioritize_pages(pages: list[dict], limit: int = PAGE_LIMIT) -> list[dict]:
+    """Sort pages by URL keyword relevance, cap at limit."""
+    sorted_pages = sorted(pages, key=_url_priority_score, reverse=True)
+    if len(sorted_pages) > limit:
+        print(f"  [LLM] Capping at {limit} pages (had {len(sorted_pages)}), prioritizing by URL keywords")
+        return sorted_pages[:limit]
+    return sorted_pages
+
+
+async def _gemini_call(prompt: str) -> str:
+    """Run a blocking Gemini call in a thread, with 30s timeout."""
+    def _sync():
+        response = client.models.generate_content(model=MODEL, contents=prompt)
+        return response.text
+
+    return await asyncio.wait_for(
+        asyncio.to_thread(_sync),
+        timeout=LLM_TIMEOUT,
+    )
+
+
+async def extract_opportunities(page: dict, index: int, total: int) -> list[dict]:
+    """Extract opportunities from one page. Returns [] on any failure."""
     text = page.get("html_text", "")
     url = page.get("url", "")
     school = page.get("school", "")
@@ -83,112 +131,109 @@ def extract_opportunities(page: dict, retries: int = 2) -> list[dict]:
     if not text or len(text) < 100:
         return []
 
-    # Truncate to avoid token limits
-    text_excerpt = text[:12000]
+    print(f"  [LLM] Parsing page {index}/{total}: {url}")
 
-    prompt = f"Source URL: {url}\nSchool: {school}\n\nPage content:\n{text_excerpt}"
+    prompt = f"{EXTRACT_SYSTEM}\n\nSource URL: {url}\nSchool: {school}\n\nPage content:\n{text[:12000]}"
 
-    for attempt in range(retries + 1):
-        try:
-            response = client.models.generate_content(model=MODEL, contents=f"{EXTRACT_SYSTEM}\n\n{prompt}")
-            raw = response.text
-            cleaned = _clean_json(raw)
-            opps = json.loads(cleaned)
-            if not isinstance(opps, list):
-                return []
-            # Annotate with school and source url
-            for opp in opps:
-                opp["school"] = school
-                if not opp.get("url"):
-                    opp["url"] = url
-            return opps
-        except json.JSONDecodeError as e:
-            print(f"  [JSON parse error] {url}: {e}")
-            if attempt == retries:
-                return []
-            time.sleep(2)
-        except Exception as e:
-            if "quota" in str(e).lower() or "rate" in str(e).lower():
-                print(f"  [Rate limit] sleeping 30s...")
-                time.sleep(30)
-            else:
-                print(f"  [LLM extract error] {url}: {e}")
-                if attempt == retries:
-                    return []
-                time.sleep(3)
-
-    return []
+    try:
+        raw = await _gemini_call(prompt)
+        cleaned = _clean_json(raw)
+        opps = json.loads(cleaned)
+        if not isinstance(opps, list):
+            return []
+        for opp in opps:
+            opp["school"] = school
+            if not opp.get("url"):
+                opp["url"] = url
+        return opps
+    except asyncio.TimeoutError:
+        print(f"  [LLM TIMEOUT] skipped {url}")
+        return []
+    except json.JSONDecodeError as e:
+        print(f"  [LLM JSON error] {url}: {e}")
+        return []
+    except Exception as e:
+        if "quota" in str(e).lower() or "rate" in str(e).lower():
+            print(f"  [LLM rate limit] sleeping 30s...")
+            await asyncio.sleep(30)
+        else:
+            print(f"  [LLM error] {url}: {e}")
+        return []
 
 
-def filter_opportunities(opps: list[dict], retries: int = 2) -> list[dict]:
-    """
-    Use Claude to classify eligibility_match for each opportunity.
-    Returns the same list with eligibility_match field set.
-    """
+async def filter_opportunities(opps: list[dict]) -> list[dict]:
+    """Classify eligibility_match for each opportunity. Batches of 20."""
     if not opps:
         return []
 
-    # Batch in chunks of 20 to stay within token limits
     BATCH_SIZE = 20
     all_filtered = []
 
     for i in range(0, len(opps), BATCH_SIZE):
-        batch = opps[i : i + BATCH_SIZE]
-        prompt = json.dumps(batch, indent=2)
+        batch = opps[i: i + BATCH_SIZE]
+        batch_num = i // BATCH_SIZE + 1
+        total_batches = (len(opps) + BATCH_SIZE - 1) // BATCH_SIZE
+        print(f"  [LLM] Filtering batch {batch_num}/{total_batches} ({len(batch)} opportunities)")
 
-        for attempt in range(retries + 1):
-            try:
-                response = client.models.generate_content(model=MODEL, contents=f"{FILTER_SYSTEM}\n\n{prompt}")
-                raw = response.text
-                cleaned = _clean_json(raw)
-                filtered = json.loads(cleaned)
-                if isinstance(filtered, list):
-                    all_filtered.extend(filtered)
-                    break
-                else:
-                    all_filtered.extend(batch)
-                    break
-            except json.JSONDecodeError as e:
-                print(f"  [Filter JSON error] batch {i}: {e}")
-                if attempt == retries:
-                    for opp in batch:
-                        opp.setdefault("eligibility_match", "eligibility unclear — verify before applying")
-                    all_filtered.extend(batch)
-                else:
-                    time.sleep(2)
-            except Exception as e:
-                if "quota" in str(e).lower() or "rate" in str(e).lower():
-                    print(f"  [Rate limit] sleeping 30s...")
-                    time.sleep(30)
-                else:
-                    print(f"  [LLM filter error] batch {i}: {e}")
-                    if attempt == retries:
-                        for opp in batch:
-                            opp.setdefault("eligibility_match", "eligibility unclear — verify before applying")
-                        all_filtered.extend(batch)
-                    else:
-                        time.sleep(3)
+        prompt = f"{FILTER_SYSTEM}\n\n{json.dumps(batch, indent=2)}"
+        try:
+            raw = await _gemini_call(prompt)
+            cleaned = _clean_json(raw)
+            filtered = json.loads(cleaned)
+            if isinstance(filtered, list):
+                all_filtered.extend(filtered)
+            else:
+                _mark_unclear(batch)
+                all_filtered.extend(batch)
+        except asyncio.TimeoutError:
+            print(f"  [LLM TIMEOUT] filter batch {batch_num} — marking unclear")
+            _mark_unclear(batch)
+            all_filtered.extend(batch)
+        except json.JSONDecodeError as e:
+            print(f"  [LLM JSON error] filter batch {batch_num}: {e}")
+            _mark_unclear(batch)
+            all_filtered.extend(batch)
+        except Exception as e:
+            if "quota" in str(e).lower() or "rate" in str(e).lower():
+                print(f"  [LLM rate limit] sleeping 30s...")
+                await asyncio.sleep(30)
+            else:
+                print(f"  [LLM error] filter batch {batch_num}: {e}")
+            _mark_unclear(batch)
+            all_filtered.extend(batch)
+
+        if i + BATCH_SIZE < len(opps):
+            await asyncio.sleep(RATE_DELAY)
 
     return all_filtered
 
 
-def parse_and_filter_pages(pages: list[dict]) -> list[dict]:
-    """
-    Full pipeline: extract then filter opportunities from a list of pages.
-    Deduplicates by (name, school, url).
-    """
-    all_opps = []
-    seen = set()
+def _mark_unclear(opps: list[dict]) -> None:
+    for opp in opps:
+        opp.setdefault("eligibility_match", "eligibility unclear — verify before applying")
 
-    for page in pages:
-        opps = extract_opportunities(page)
+
+async def parse_and_filter_pages(pages: list[dict]) -> list[dict]:
+    """
+    Full async pipeline: prioritize → extract → deduplicate → filter.
+    Caps at PAGE_LIMIT pages, sorted by URL keyword relevance.
+    """
+    pages = _prioritize_pages(pages)
+    total = len(pages)
+    all_opps = []
+    seen: set[tuple] = set()
+
+    for i, page in enumerate(pages, 1):
+        opps = await extract_opportunities(page, i, total)
         for opp in opps:
             key = (opp.get("school", ""), opp.get("name", ""), opp.get("url", ""))
             if key not in seen:
                 seen.add(key)
                 all_opps.append(opp)
+        if i < total:
+            await asyncio.sleep(RATE_DELAY)
 
     if all_opps:
-        all_opps = filter_opportunities(all_opps)
+        all_opps = await filter_opportunities(all_opps)
 
     return all_opps
