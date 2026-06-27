@@ -28,15 +28,6 @@ jobs:
           echo "=== Installed packages ==="
           pip list
 
-      - name: Install Playwright browsers
-        run: |
-          set -euo pipefail
-          echo "=== Installing Playwright system deps ==="
-          playwright install-deps chromium
-          echo "=== Installing Playwright Chromium browser ==="
-          playwright install chromium
-          echo "=== Playwright install complete ==="
-
       - name: Check environment
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

@@ -1,12 +1,7 @@
 """
-crawler.py — Focused crawler for craft school scholarship pages.
+crawler.py — httpx-only crawler for craft school scholarship pages.
 
-Hard limits enforced in code (not config):
-  - 20 pages per site max
-  - 90 second per-site timeout via asyncio.wait_for()
-  - No query strings
-  - URL allowlist: only follow links containing scholarship-relevant words
-  - 45 minute global job timeout
+No Playwright. Strict timeouts enforced at every level.
 """
 
 import asyncio
@@ -21,24 +16,25 @@ import pdfplumber
 from bs4 import BeautifulSoup
 
 # ── Hard limits ────────────────────────────────────────────────────────────────
-PAGE_CAP = 20           # pages per site
-SITE_TIMEOUT = 90       # seconds per site
-GLOBAL_TIMEOUT = 45 * 60  # 45 minutes total
+PAGE_CAP = 15
+SITE_TIMEOUT = 60        # seconds — enforced via asyncio.wait_for()
+GLOBAL_TIMEOUT = 45 * 60 # 45 minutes total
+REQUEST_TIMEOUT = 10.0   # seconds per HTTP request
 
-# ── Keyword allowlist — only follow links containing at least one of these ─────
+# ── Only follow links whose URL path or anchor text contains one of these ──────
 FOLLOW_KEYWORDS = {
     "scholarship", "grant", "award", "fellow", "assistantship",
     "residency", "residencies", "financial", "tuition", "apply",
     "fund", "funded", "stipend", "emerging", "opportunity",
 }
 
-# ── Keywords that flag a page as containing opportunity content ────────────────
+# ── Page is flagged if its text contains one of these ─────────────────────────
 CONTENT_KEYWORDS = {
     "scholarship", "grant", "award", "fellowship", "assistantship",
     "work-study", "stipend", "funded", "tuition waiver", "emerging artist",
 }
 
-# ── Priority paths to probe on every domain before general crawling ────────────
+# ── Paths to probe first on every domain ──────────────────────────────────────
 PRIORITY_PATHS = [
     "/scholarships", "/scholarship", "/financial-aid", "/financial_aid",
     "/assistantships", "/residencies", "/residency", "/fellowships",
@@ -46,7 +42,7 @@ PRIORITY_PATHS = [
     "/opportunities", "/tuition", "/support",
 ]
 
-# ── Path prefixes that are never scholarship pages ─────────────────────────────
+# ── Path segments that are never scholarship pages ─────────────────────────────
 SKIP_PATH_PREFIXES = (
     "/shop", "/store", "/product", "/event", "/calendar",
     "/blog", "/news", "/gallery", "/archive", "/staff",
@@ -66,7 +62,6 @@ SKIP_EXTENSIONS = {
 
 def _should_skip(url: str) -> bool:
     parsed = urlparse(url)
-    # No query strings — they generate infinite variations
     if parsed.query:
         return True
     path = parsed.path.lower()
@@ -85,9 +80,7 @@ def _is_internal(base_url: str, url: str) -> bool:
 
 
 def _is_allowlisted(url: str, anchor: str) -> bool:
-    """Only follow links where URL path or anchor text contains a follow keyword."""
-    path = urlparse(url).path.lower()
-    text = (path + " " + anchor.lower())
+    text = urlparse(url).path.lower() + " " + anchor.lower()
     return any(kw in text for kw in FOLLOW_KEYWORDS)
 
 
@@ -100,20 +93,24 @@ def _contains_content_keywords(text: str) -> bool:
     return any(kw in t for kw in CONTENT_KEYWORDS)
 
 
-def _extract_links(base_url: str, html: str) -> list[tuple[str, str]]:
-    """Return (url, anchor_text) pairs that are internal, clean, and allowlisted."""
+def _page_text(html: str) -> str:
     soup = BeautifulSoup(html, "lxml")
-    seen = set()
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    return soup.get_text(separator=" ", strip=True)
+
+
+def _extract_links(base_url: str, html: str) -> list[tuple[str, str]]:
+    soup = BeautifulSoup(html, "lxml")
+    seen: set[str] = set()
     results = []
     for tag in soup.find_all("a", href=True):
-        href = tag["href"].strip()
-        full = _normalize(urljoin(base_url, href))
-        parsed = urlparse(full)
-        if parsed.scheme not in ("http", "https"):
-            continue
+        full = _normalize(urljoin(base_url, tag["href"].strip()))
         if full in seen:
             continue
         seen.add(full)
+        if urlparse(full).scheme not in ("http", "https"):
+            continue
         if not _is_internal(base_url, full):
             continue
         if _should_skip(full):
@@ -134,180 +131,122 @@ def _extract_pdf_links(base_url: str, html: str) -> list[str]:
     })
 
 
-async def _head_ok(url: str, client: httpx.AsyncClient) -> bool:
+async def _get(url: str, client: httpx.AsyncClient) -> Optional[str]:
+    """Fetch a URL. Returns HTML text or None. Never raises."""
     try:
-        r = await client.head(url, timeout=3, follow_redirects=True)
-        return r.status_code < 400
-    except Exception:
-        return False
-
-
-PAGE_TIMEOUT = 15  # seconds — hard cap per individual page fetch
-
-
-async def _fetch_html(url: str, client: httpx.AsyncClient) -> Optional[str]:
-    async def _get():
-        r = await client.get(url, timeout=httpx.Timeout(10.0), follow_redirects=True)
+        r = await client.get(url, follow_redirects=True)
         r.raise_for_status()
         ct = r.headers.get("content-type", "")
         if "html" in ct or not ct:
             return r.text
         return None
-    try:
-        return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
-    except asyncio.TimeoutError:
-        print(f"    [SKIP] {url} — timeout after {PAGE_TIMEOUT}s")
+    except httpx.TimeoutException:
+        print(f"    [SKIP] {url} — timeout after {REQUEST_TIMEOUT}s")
         return None
     except Exception as e:
-        print(f"    [SKIP] {url} — fetch: {e}")
+        print(f"    [SKIP] {url} — {type(e).__name__}: {e}")
         return None
 
 
-async def _fetch_html_playwright(url: str, browser) -> Optional[str]:
-    """Fetch a JS-rendered page using an already-open browser instance."""
-    from playwright.async_api import Error as PlaywrightError
-
-    async def _get():
-        page = await browser.new_page()
-        try:
-            await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-            return await page.content()
-        finally:
-            try:
-                await page.close()
-            except Exception:
-                pass
+async def _get_pdf(url: str, client: httpx.AsyncClient) -> Optional[str]:
+    """Fetch and parse a PDF. Returns extracted text or None. Never raises."""
     try:
-        return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
-    except asyncio.TimeoutError:
-        print(f"    [SKIP] {url} — timeout after {PAGE_TIMEOUT}s")
-        return None
-    except PlaywrightError as e:
-        print(f"    [SKIP] {url} — playwright: {e}")
-        return None
-    except Exception as e:
-        print(f"    [SKIP] {url} — {e}")
-        return None
-
-
-async def _fetch_pdf(url: str) -> Optional[str]:
-    """Fetch and parse a PDF — runs blocking pdfplumber in a thread executor."""
-    async def _get():
+        r = await client.get(url, follow_redirects=True)
+        r.raise_for_status()
         loop = asyncio.get_event_loop()
-        def _sync():
-            r = httpx.get(url, timeout=10, follow_redirects=True)
-            r.raise_for_status()
+        content = r.content
+
+        def _parse():
             parts = []
-            with pdfplumber.open(io.BytesIO(r.content)) as pdf:
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
                 for pg in pdf.pages[:10]:
                     t = pg.extract_text()
                     if t:
                         parts.append(t)
             return "\n".join(parts)
-        return await loop.run_in_executor(None, _sync)
-    try:
-        return await asyncio.wait_for(_get(), timeout=PAGE_TIMEOUT)
-    except asyncio.TimeoutError:
-        print(f"    [SKIP] {url} — pdf timeout after {PAGE_TIMEOUT}s")
+
+        return await loop.run_in_executor(None, _parse)
+    except httpx.TimeoutException:
+        print(f"    [SKIP] {url} — pdf timeout")
         return None
     except Exception as e:
-        print(f"    [SKIP] {url} — pdf: {e}")
+        print(f"    [SKIP] {url} — pdf {type(e).__name__}: {e}")
         return None
-
-
-def _page_text(html: str) -> str:
-    soup = BeautifulSoup(html, "lxml")
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    return soup.get_text(separator=" ", strip=True)
 
 
 async def _crawl_site_inner(base_url: str, depth: int) -> list[dict]:
-    """Core crawl logic — called inside asyncio.wait_for() in crawl_site()."""
-    from playwright.async_api import async_playwright
-
     school = urlparse(base_url).netloc.replace("www.", "")
     visited: set[str] = set()
     results: list[dict] = []
-    queue: list[tuple[str, int]] = []
 
-    async with async_playwright() as p:
-        try:
-            browser = await asyncio.wait_for(p.chromium.launch(headless=True), timeout=30)
-        except Exception as e:
-            print(f"  [SKIP] browser launch failed: {e}")
-            return results
-        try:
-            async with httpx.AsyncClient(
-                headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
-                follow_redirects=True,
-            ) as client:
-                # Phase 1: probe priority paths concurrently (3s timeout each)
-                origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
-                probe_urls = [_normalize(origin + path) for path in PRIORITY_PATHS]
-                probe_results = await asyncio.gather(
-                    *[_head_ok(u, client) for u in probe_urls],
-                    return_exceptions=True,
-                )
-                probed = [u for u, ok in zip(probe_urls, probe_results) if ok is True]
-                print(f"  Priority paths found: {len(probed)}/{len(PRIORITY_PATHS)}")
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarshipBot/1.0)"},
+    ) as client:
+        # Probe priority paths concurrently
+        origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+        probe_urls = [_normalize(origin + p) for p in PRIORITY_PATHS]
 
-                queue = [(base_url, 0)] + [(u, 1) for u in probed]
-
-                while queue and len(visited) < PAGE_CAP:
-                    url, d = queue.pop(0)
-                    url = _normalize(url)
-                    if url in visited or _should_skip(url):
-                        continue
-                    visited.add(url)
-
-                    n = len(visited)
-                    print(f"  [{n}/{PAGE_CAP}] {url}")
-
-                    if url.lower().endswith(".pdf"):
-                        text = await _fetch_pdf(url)
-                        if text and _contains_content_keywords(text):
-                            results.append({"url": url, "html_text": text, "page_type": "pdf", "school": school})
-                            print(f"    ✓ pdf flagged")
-                        continue
-
-                    html = await _fetch_html(url, client)
-                    if html is None or len(html) < 300:
-                        html = await _fetch_html_playwright(url, browser)
-                    if not html:
-                        continue
-
-                    text = _page_text(html)
-                    if _contains_content_keywords(text):
-                        results.append({"url": url, "html_text": text[:40000], "page_type": "page", "school": school})
-                        print(f"    ✓ flagged")
-
-                    if d < depth and len(visited) < PAGE_CAP:
-                        for link_url, anchor in _extract_links(base_url, html):
-                            if link_url not in visited:
-                                queue.append((link_url, d + 1))
-                        for pdf_url in _extract_pdf_links(base_url, html):
-                            if pdf_url not in visited:
-                                queue.append((pdf_url, d + 1))
-        finally:
+        async def _probe(u):
             try:
-                await asyncio.wait_for(browser.close(), timeout=5)
+                r = await client.head(u, follow_redirects=True)
+                return u if r.status_code < 400 else None
             except Exception:
-                pass
+                return None
 
-    print(f"  Done: {len(visited)} pages visited, {len(results)} flagged")
+        probe_hits = await asyncio.gather(*[_probe(u) for u in probe_urls])
+        probed = [u for u in probe_hits if u]
+        print(f"  Priority paths found: {len(probed)}/{len(PRIORITY_PATHS)}")
+
+        queue: list[tuple[str, int]] = [(base_url, 0)] + [(u, 1) for u in probed]
+
+        while queue and len(visited) < PAGE_CAP:
+            url, d = queue.pop(0)
+            url = _normalize(url)
+            if url in visited or _should_skip(url):
+                continue
+            visited.add(url)
+
+            print(f"  [{len(visited)}/{PAGE_CAP}] {url}")
+
+            if url.lower().endswith(".pdf"):
+                text = await _get_pdf(url, client)
+                if text and _contains_content_keywords(text):
+                    results.append({"url": url, "html_text": text, "page_type": "pdf", "school": school})
+                    print(f"    ✓ pdf flagged")
+                continue
+
+            html = await _get(url, client)
+            if not html:
+                continue
+
+            text = _page_text(html)
+            if _contains_content_keywords(text):
+                results.append({"url": url, "html_text": text[:40000], "page_type": "page", "school": school})
+                print(f"    ✓ flagged")
+
+            if d < depth and len(visited) < PAGE_CAP:
+                for link_url, anchor in _extract_links(base_url, html):
+                    if link_url not in visited:
+                        queue.append((link_url, d + 1))
+                for pdf_url in _extract_pdf_links(base_url, html):
+                    if pdf_url not in visited:
+                        queue.append((pdf_url, d + 1))
+
+    print(f"  Done: {len(visited)} pages, {len(results)} flagged")
     return results
 
 
 async def crawl_site(base_url: str, depth: int = 3) -> list[dict]:
-    """Crawl one site with a hard 90-second timeout."""
+    """Crawl one site. Hard 60-second ceiling via asyncio.wait_for()."""
     try:
         return await asyncio.wait_for(
             _crawl_site_inner(base_url, depth),
             timeout=SITE_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        print(f"  [TIMEOUT] {base_url} hit {SITE_TIMEOUT}s limit — moving on")
+        print(f"  [TIMEOUT] {base_url} — {SITE_TIMEOUT}s site limit reached, moving on")
         return []
     except Exception as e:
         print(f"  [ERROR] {base_url}: {e}")
@@ -317,16 +256,16 @@ async def crawl_site(base_url: str, depth: int = 3) -> list[dict]:
 async def crawl_all_sites(
     targets: list[str],
     max_depth: int = 3,
-    **_kwargs,  # absorb unused config keys (keyword_flags, timeouts, etc.)
+    **_kwargs,
 ) -> dict[str, list[dict]]:
-    """Crawl all sites with a 45-minute global timeout."""
+    """Crawl all sites. Hard 45-minute global ceiling."""
     results = {}
     global_start = time.monotonic()
 
     for i, url in enumerate(targets, 1):
         elapsed = time.monotonic() - global_start
         if elapsed >= GLOBAL_TIMEOUT:
-            print(f"\n[GLOBAL TIMEOUT] 45-minute limit reached after {i-1}/{len(targets)} sites")
+            print(f"\n[GLOBAL TIMEOUT] 45-minute limit after {i-1}/{len(targets)} sites")
             break
         print(f"\n[{i}/{len(targets)}] {url}  (elapsed: {elapsed/60:.1f}m)")
         results[url] = await crawl_site(url, depth=max_depth)

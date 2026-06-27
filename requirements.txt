@@ -1,5 +1,4 @@
 google-generativeai
-playwright
 beautifulsoup4
 httpx
 lxml
