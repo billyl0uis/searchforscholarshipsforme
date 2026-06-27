@@ -15,9 +15,17 @@ from urllib.parse import urlparse
 
 from google import genai
 
-print("[DEBUG] Initializing Gemini client...")
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-print("[DEBUG] Gemini client ready")
+print("[DEBUG] llm_parser module imported — Gemini client deferred until first use", flush=True)
+_client: "genai.Client | None" = None
+
+
+def _get_client() -> "genai.Client":
+    global _client
+    if _client is None:
+        print("[DEBUG] Initializing Gemini client...", flush=True)
+        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        print("[DEBUG] Gemini client ready", flush=True)
+    return _client
 
 MODEL = "gemini-1.5-flash"
 LLM_TIMEOUT = 60      # seconds per Gemini call
@@ -116,7 +124,7 @@ def _prioritize_pages(pages: list[dict], limit: int = PAGE_LIMIT) -> list[dict]:
 async def _gemini_call(prompt: str) -> str:
     """Run a blocking Gemini call in a thread, with 30s timeout."""
     def _sync():
-        response = client.models.generate_content(model=MODEL, contents=prompt)
+        response = _get_client().models.generate_content(model=MODEL, contents=prompt)
         return response.text
 
     return await asyncio.wait_for(

@@ -65,10 +65,11 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           echo "=== Starting main crawler ==="
-          python main.py
+          python -u main.py
           echo "=== Crawler finished ==="
 
       - name: Save database to repo

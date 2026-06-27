@@ -38,12 +38,12 @@ def load_config(path: str = "config.yaml") -> dict:
 
 
 def main(dry_run: bool = False):
-    print("=" * 60)
-    print("Craft Scholarship Finder — starting run")
-    print(f"Date: {date.today().isoformat()}")
+    print("=" * 60, flush=True)
+    print("Craft Scholarship Finder — starting run", flush=True)
+    print(f"Date: {date.today().isoformat()}", flush=True)
     if dry_run:
-        print("MODE: DRY RUN (first 3 sites only, DB and email skipped)")
-    print("=" * 60)
+        print("MODE: DRY RUN (first 3 sites only, DB and email skipped)", flush=True)
+    print("=" * 60, flush=True)
 
     # ── Load config ──────────────────────────────────────────────
     config = load_config()
@@ -77,10 +77,11 @@ def main(dry_run: bool = False):
     else:
         print(f"Existing database found at {DB_PATH}")
     init_db(DB_PATH)  # CREATE TABLE IF NOT EXISTS — safe on both new and existing DBs
-    print(f"Database ready: {DB_PATH}")
+    print(f"Database ready: {DB_PATH}", flush=True)
 
     # ── Crawl ─────────────────────────────────────────────────────
-    print("\n── CRAWLING ──────────────────────────────────────────────")
+    print("\n── CRAWLING ──────────────────────────────────────────────", flush=True)
+    print("[DEBUG] About to call asyncio.run(crawl_all_sites)", flush=True)
     site_pages = asyncio.run(
         crawl_all_sites(
             targets,
