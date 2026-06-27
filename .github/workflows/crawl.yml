@@ -75,6 +75,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+          git pull --rebase origin main
           git add scholarships.db
           git diff --staged --quiet && echo "No DB changes to commit" || git commit -m "Update scholarships database [$(date -u +%Y-%m-%d)]"
           git push
