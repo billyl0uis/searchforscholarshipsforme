@@ -188,7 +188,11 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
         print(f"  [LLM DEBUG] Raw that failed to parse: {raw[:300] if 'raw' in dir() else 'N/A'}")
         return []
     except Exception as e:
-        if "quota" in str(e).lower() or "rate" in str(e).lower():
+        err = str(e)
+        if "429" in err and "day" in err.lower():
+            print(f"  [LLM DAILY QUOTA EXHAUSTED] Aborting LLM phase — quota resets at midnight", flush=True)
+            raise RuntimeError("DAILY_QUOTA_EXHAUSTED") from e
+        elif "429" in err or "quota" in err.lower() or "rate" in err.lower():
             print(f"  [LLM rate limit] sleeping 4s...", flush=True)
             await asyncio.sleep(4)
         else:
@@ -264,7 +268,13 @@ async def parse_and_filter_pages(pages: list[dict]) -> list[dict]:
 
     print(f"[DEBUG] Starting page loop...")
     for i, page in enumerate(pages, 1):
-        opps = await extract_opportunities(page, i, total)
+        try:
+            opps = await extract_opportunities(page, i, total)
+        except RuntimeError as e:
+            if "DAILY_QUOTA_EXHAUSTED" in str(e):
+                print(f"[LLM] Stopped after {i-1}/{total} pages — daily quota hit", flush=True)
+                break
+            raise
         for opp in opps:
             key = (opp.get("school", ""), opp.get("name", ""), opp.get("url", ""))
             if key not in seen:
