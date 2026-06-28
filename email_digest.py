@@ -189,6 +189,13 @@ def send_digest(
         html_content=HtmlContent(html_body),
     )
 
+    print(f"[EMAIL DEBUG] Email body preview: {html_body[:1000]}")
+    print(f"[EMAIL DEBUG] SendGrid params:")
+    print(f"  from:    {sender}")
+    print(f"  to:      {recipient}")
+    print(f"  subject: {subject}")
+    print(f"  body_len: {len(html_body)} chars")
+
     sg = sendgrid.SendGridAPIClient(api_key=api_key)
     response = sg.send(message)
     print(f"[EMAIL] SendGrid response: {response.status_code}")
