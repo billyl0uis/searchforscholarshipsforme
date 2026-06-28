@@ -124,14 +124,19 @@ def _prioritize_pages(pages: list[dict], limit: int = PAGE_LIMIT) -> list[dict]:
 async def _gemini_call(prompt: str, debug_label: str = "") -> str:
     """Run a blocking Gemini call in a thread, with LLM_TIMEOUT cap."""
     def _sync():
-        return _get_client().models.generate_content(model=MODEL, contents=prompt).text
+        try:
+            response = _get_client().models.generate_content(model=MODEL, contents=prompt)
+            print(f"  [LLM DEBUG] Raw response ({debug_label}): {response.text[:300]}", flush=True)
+            return response.text
+        except Exception as e:
+            print(f"  [LLM DEBUG] Gemini ERROR ({debug_label}): {type(e).__name__}: {e}", flush=True)
+            raise
 
     print(f"  [LLM DEBUG] Calling Gemini ({debug_label})...", flush=True)
     text = await asyncio.wait_for(
         asyncio.to_thread(_sync),
         timeout=LLM_TIMEOUT,
     )
-    print(f"  [LLM DEBUG] Got response ({debug_label}): {text[:300]}", flush=True)
     return text
 
 
@@ -185,7 +190,7 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
     except Exception as e:
         if "quota" in str(e).lower() or "rate" in str(e).lower():
             print(f"  [LLM rate limit] sleeping 30s before retry...", flush=True)
-            await asyncio.sleep(30)
+            await asyncio.sleep(4)
         else:
             print(f"  [LLM error] {url}: {type(e).__name__}: {e}", flush=True)
         return []
@@ -226,7 +231,7 @@ async def filter_opportunities(opps: list[dict]) -> list[dict]:
         except Exception as e:
             if "quota" in str(e).lower() or "rate" in str(e).lower():
                 print(f"  [LLM rate limit] sleeping 30s...")
-                await asyncio.sleep(30)
+                await asyncio.sleep(4)
             else:
                 print(f"  [LLM error] filter batch {batch_num}: {e}")
             _mark_unclear(batch)
