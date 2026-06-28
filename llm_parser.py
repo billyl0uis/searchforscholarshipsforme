@@ -141,7 +141,12 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
     url = page.get("url", "")
     school = page.get("school", "")
 
+    print(f"  [LLM DEBUG] Content length for {url}: {len(text)} chars", flush=True)
+    if text:
+        print(f"  [LLM DEBUG] Content preview: {text[:200]}", flush=True)
+
     if not text or len(text) < 100:
+        print(f"  [LLM DEBUG] SKIPPED (too short or empty): {url}", flush=True)
         return []
 
     print(f"  [LLM] Parsing page {index}/{total}: {url}", flush=True)
@@ -243,10 +248,12 @@ async def parse_and_filter_pages(pages: list[dict]) -> list[dict]:
     Full async pipeline: prioritize → extract → deduplicate → filter.
     Caps at PAGE_LIMIT pages, sorted by URL keyword relevance.
     """
-    print(f"[DEBUG] parse_and_filter_pages entered, {len(pages)} pages received")
+    print(f"[DEBUG] parse_and_filter_pages entered, {len(pages)} pages received", flush=True)
+    for p in pages[:5]:
+        print(f"  [DEBUG] sample page — url={p.get('url')} html_text_len={len(p.get('html_text',''))}", flush=True)
     pages = _prioritize_pages(pages)
     total = len(pages)
-    print(f"[DEBUG] After prioritization: {total} pages to parse")
+    print(f"[DEBUG] After prioritization: {total} pages to parse", flush=True)
     all_opps = []
     seen: set[tuple] = set()
 
