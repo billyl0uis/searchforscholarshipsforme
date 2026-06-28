@@ -27,7 +27,7 @@ def _get_client() -> "genai.Client":
         print("[DEBUG] Gemini client ready", flush=True)
     return _client
 
-MODEL = "gemini-1.5-flash"
+MODEL = "gemini-2.0-flash"
 LLM_TIMEOUT = 60      # seconds per Gemini call
 PAGE_LIMIT = 150      # max pages sent to Gemini per run
 RATE_DELAY = 4.0      # seconds between calls (15 req/min free tier = 4s gap)
@@ -189,7 +189,7 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
         return []
     except Exception as e:
         if "quota" in str(e).lower() or "rate" in str(e).lower():
-            print(f"  [LLM rate limit] sleeping 30s before retry...", flush=True)
+            print(f"  [LLM rate limit] sleeping 4s...", flush=True)
             await asyncio.sleep(4)
         else:
             print(f"  [LLM error] {url}: {type(e).__name__}: {e}", flush=True)
@@ -230,7 +230,7 @@ async def filter_opportunities(opps: list[dict]) -> list[dict]:
             all_filtered.extend(batch)
         except Exception as e:
             if "quota" in str(e).lower() or "rate" in str(e).lower():
-                print(f"  [LLM rate limit] sleeping 30s...")
+                print(f"  [LLM rate limit] sleeping 4s...", flush=True)
                 await asyncio.sleep(4)
             else:
                 print(f"  [LLM error] filter batch {batch_num}: {e}")
