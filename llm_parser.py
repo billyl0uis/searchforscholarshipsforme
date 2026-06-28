@@ -123,19 +123,16 @@ def _prioritize_pages(pages: list[dict], limit: int = PAGE_LIMIT) -> list[dict]:
 
 async def _gemini_call(prompt: str, debug_label: str = "") -> str:
     """Run a blocking Gemini call in a thread, with LLM_TIMEOUT cap."""
-    raw_text: list[str] = []
-
     def _sync():
-        response = _get_client().models.generate_content(model=MODEL, contents=prompt)
-        text = response.text
-        raw_text.append(text)
-        print(f"  [LLM DEBUG] Raw response{' (' + debug_label + ')' if debug_label else ''}: {text[:300]}", flush=True)
-        return text
+        return _get_client().models.generate_content(model=MODEL, contents=prompt).text
 
-    return await asyncio.wait_for(
+    print(f"  [LLM DEBUG] Calling Gemini ({debug_label})...", flush=True)
+    text = await asyncio.wait_for(
         asyncio.to_thread(_sync),
         timeout=LLM_TIMEOUT,
     )
+    print(f"  [LLM DEBUG] Got response ({debug_label}): {text[:300]}", flush=True)
+    return text
 
 
 async def extract_opportunities(page: dict, index: int, total: int) -> list[dict]:
