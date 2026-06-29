@@ -2,7 +2,8 @@ name: Craft Scholarship Crawler
 
 on:
   schedule:
-    - cron: '0 14 * * 0'  # Sunday 9am ET (UTC-5 in winter, UTC-4 in summer)
+    - cron: '0 14 * * 0'  # Sunday 9am ET (regular)
+    - cron: '0 4 * * 0'   # Sunday midnight ET (one-time test — remove after success)
   workflow_dispatch:
 
 jobs:
