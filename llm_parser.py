@@ -27,7 +27,7 @@ def _get_client() -> "genai.Client":
         print("[DEBUG] Gemini client ready", flush=True)
     return _client
 
-MODEL = "gemini-2.0-flash-lite"
+MODEL = "gemini-2.0-flash"
 LLM_TIMEOUT = 60      # seconds per Gemini call
 PAGE_LIMIT = 150      # max pages sent to Gemini per run
 RATE_DELAY = 4.0      # seconds between calls (15 req/min free tier = 4s gap)
