@@ -1,39 +1,39 @@
 """
-llm_parser.py — Uses Gemini to extract and filter scholarship opportunities.
+llm_parser.py — Uses Groq (llama-3.3-70b-versatile) to extract and filter scholarship opportunities.
 
-All Gemini calls are async via asyncio.to_thread() so they can be
-interrupted by asyncio.wait_for(). Includes per-call 30s timeout,
-1s rate-limit delay between calls, and a 150-page batch cap.
+All Groq calls are async via asyncio.to_thread() so they can be
+interrupted by asyncio.wait_for(). Includes per-call 60s timeout,
+2s rate-limit delay between calls, and a 150-page batch cap.
 """
 
 import asyncio
 import json
 import os
 import re
-import time
 from urllib.parse import urlparse
 
-from google import genai
+from groq import Groq
 
-print("[DEBUG] llm_parser module imported — Gemini client deferred until first use", flush=True)
-_client: "genai.Client | None" = None
+print("[DEBUG] llm_parser module imported — Groq client deferred until first use", flush=True)
+_client: "Groq | None" = None
 
 
-def _get_client() -> "genai.Client":
+def _get_client() -> Groq:
     global _client
     if _client is None:
-        print("[DEBUG] Initializing Gemini client...", flush=True)
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        print("[DEBUG] Gemini client ready", flush=True)
+        print("[DEBUG] Initializing Groq client...", flush=True)
+        _client = Groq(api_key=os.environ["GROQ_API_KEY"])
+        print("[DEBUG] Groq client ready", flush=True)
     return _client
 
-MODEL = "gemini-2.0-flash"
-LLM_TIMEOUT = 60      # seconds per Gemini call
-PAGE_LIMIT = 150      # max pages sent to Gemini per run
-RATE_DELAY = 4.0      # seconds between calls (15 req/min free tier = 4s gap)
+
+MODEL = "llama-3.3-70b-versatile"
+LLM_TIMEOUT = 60      # seconds per Groq call
+PAGE_LIMIT = 150      # max pages sent to LLM per run
+RATE_DELAY = 2.0      # seconds between calls (Groq free tier is generous)
 DEBUG_PAGES = 3       # kept for legacy, raw response now always logged
 
-# Higher score = crawled first
+# Higher score = parsed first
 URL_PRIORITY = [
     ("scholarship", 6),
     ("assistantship", 6),
@@ -121,18 +121,23 @@ def _prioritize_pages(pages: list[dict], limit: int = PAGE_LIMIT) -> list[dict]:
     return sorted_pages
 
 
-async def _gemini_call(prompt: str, debug_label: str = "") -> str:
-    """Run a blocking Gemini call in a thread, with LLM_TIMEOUT cap."""
+async def _groq_call(prompt: str, debug_label: str = "") -> str:
+    """Run a blocking Groq call in a thread, with LLM_TIMEOUT cap."""
     def _sync():
         try:
-            response = _get_client().models.generate_content(model=MODEL, contents=prompt)
-            print(f"  [LLM DEBUG] Raw response ({debug_label}): {response.text[:300]}", flush=True)
-            return response.text
+            response = _get_client().chat.completions.create(
+                model=MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+            )
+            text = response.choices[0].message.content
+            print(f"  [LLM DEBUG] Raw response ({debug_label}): {text[:300]}", flush=True)
+            return text
         except Exception as e:
-            print(f"  [LLM DEBUG] Gemini ERROR ({debug_label}): {type(e).__name__}: {e}", flush=True)
+            print(f"  [LLM DEBUG] Groq ERROR ({debug_label}): {type(e).__name__}: {e}", flush=True)
             raise
 
-    print(f"  [LLM DEBUG] Calling Gemini ({debug_label})...", flush=True)
+    print(f"  [LLM DEBUG] Calling Groq ({debug_label})...", flush=True)
     text = await asyncio.wait_for(
         asyncio.to_thread(_sync),
         timeout=LLM_TIMEOUT,
@@ -162,7 +167,7 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
         print(f"  [LLM DEBUG] Prompt sent (first 500 chars): {prompt[:500]}", flush=True)
 
     try:
-        raw = await _gemini_call(prompt, debug_label=f"page {index}/{total}")
+        raw = await _groq_call(prompt, debug_label=f"page {index}/{total}")
 
         cleaned = _clean_json(raw)
         opps = json.loads(cleaned)
@@ -185,16 +190,13 @@ async def extract_opportunities(page: dict, index: int, total: int) -> list[dict
         return []
     except json.JSONDecodeError as e:
         print(f"  [LLM JSON error] {url}: {e}")
-        print(f"  [LLM DEBUG] Raw that failed to parse: {raw[:300] if 'raw' in dir() else 'N/A'}")
+        print(f"  [LLM DEBUG] Raw that failed to parse: {raw[:300] if 'raw' in locals() else 'N/A'}")
         return []
     except Exception as e:
         err = str(e)
-        if "429" in err and "day" in err.lower():
-            print(f"  [LLM DAILY QUOTA EXHAUSTED] Aborting LLM phase — quota resets at midnight", flush=True)
-            raise RuntimeError("DAILY_QUOTA_EXHAUSTED") from e
-        elif "429" in err or "quota" in err.lower() or "rate" in err.lower():
-            print(f"  [LLM rate limit] sleeping 4s...", flush=True)
-            await asyncio.sleep(4)
+        if "429" in err or "rate_limit" in err.lower():
+            print(f"  [LLM rate limit] sleeping 60s...", flush=True)
+            await asyncio.sleep(60)
         else:
             print(f"  [LLM error] {url}: {type(e).__name__}: {e}", flush=True)
         return []
@@ -216,7 +218,7 @@ async def filter_opportunities(opps: list[dict]) -> list[dict]:
 
         prompt = f"{FILTER_SYSTEM}\n\n{json.dumps(batch, indent=2)}"
         try:
-            raw = await _gemini_call(prompt)
+            raw = await _groq_call(prompt, debug_label=f"filter batch {batch_num}")
             cleaned = _clean_json(raw)
             filtered = json.loads(cleaned)
             if isinstance(filtered, list):
@@ -233,9 +235,9 @@ async def filter_opportunities(opps: list[dict]) -> list[dict]:
             _mark_unclear(batch)
             all_filtered.extend(batch)
         except Exception as e:
-            if "quota" in str(e).lower() or "rate" in str(e).lower():
-                print(f"  [LLM rate limit] sleeping 4s...", flush=True)
-                await asyncio.sleep(4)
+            if "429" in str(e) or "rate_limit" in str(e).lower():
+                print(f"  [LLM rate limit] sleeping 60s...", flush=True)
+                await asyncio.sleep(60)
             else:
                 print(f"  [LLM error] filter batch {batch_num}: {e}")
             _mark_unclear(batch)
@@ -266,15 +268,9 @@ async def parse_and_filter_pages(pages: list[dict]) -> list[dict]:
     all_opps = []
     seen: set[tuple] = set()
 
-    print(f"[DEBUG] Starting page loop...")
+    print(f"[DEBUG] Starting page loop...", flush=True)
     for i, page in enumerate(pages, 1):
-        try:
-            opps = await extract_opportunities(page, i, total)
-        except RuntimeError as e:
-            if "DAILY_QUOTA_EXHAUSTED" in str(e):
-                print(f"[LLM] Stopped after {i-1}/{total} pages — daily quota hit", flush=True)
-                break
-            raise
+        opps = await extract_opportunities(page, i, total)
         for opp in opps:
             key = (opp.get("school", ""), opp.get("name", ""), opp.get("url", ""))
             if key not in seen:

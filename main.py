@@ -196,14 +196,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Check required env vars
-    missing = [v for v in ["GEMINI_API_KEY"] if not os.environ.get(v)]
+    missing = [v for v in ["GROQ_API_KEY"] if not os.environ.get(v)]
     if missing:
         print(f"ERROR: Missing required environment variables: {', '.join(missing)}")
-        print("  GEMINI_API_KEY  — get a free key at https://aistudio.google.com")
+        print("  GROQ_API_KEY  — get a free key at https://console.groq.com")
         sys.exit(1)
 
     sendgrid_present = bool(os.environ.get("SENDGRID_API_KEY"))
-    print(f"[env] GEMINI_API_KEY: set")
+    print(f"[env] GROQ_API_KEY: set")
     print(f"[env] SENDGRID_API_KEY: {'set' if sendgrid_present else 'NOT SET — digest will be saved locally'}")
 
     try:

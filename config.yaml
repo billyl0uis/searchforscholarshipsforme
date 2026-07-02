@@ -3,7 +3,7 @@ email:
   sender: bailey.lou.wheeler@icloud.com
 
 # API keys are read from environment variables / GitHub Actions secrets:
-#   GEMINI_API_KEY  — get a free key at aistudio.google.com
+#   GROQ_API_KEY  — get a free key at https://console.groq.com
 #   SENDGRID_API_KEY — get one at sendgrid.com (free tier works)
 
 crawl:

@@ -1,4 +1,4 @@
-google-genai
+groq
 beautifulsoup4
 httpx
 lxml
